@@ -1,0 +1,91 @@
+# gonx 原生 YAML 配置 —— 等价于 nginx.conf
+# 用法: gonx.exe -c gonx.yml   (按扩展名自动识别为 YAML)
+ui:
+  listen: 127.0.0.1:8899   # 固定管理端口（默认随机）
+  # 固定访问令牌（默认每次启动随机生成）
+  token: ZVLbwzesmN2dzcHvR3fGgxo6felio2sGmX3mZPIzSluoCottcLv4uMQOz6xEQA9LQZHmCucS
+  open: true                # 启动时自动打开浏览器
+
+error_log:
+  path: stderr
+  level: info
+
+http:
+  gzip:
+    enabled: true
+    min_length: 1k
+    types: [text/css, application/javascript, application/json]
+
+  servers:
+    # 前端 + 三个反向代理
+    - listen: [9999]
+      server_name: [myApp]
+      root: dist
+      index: [index.html, index.htm]
+
+      # 500/502/503/504 显示自定义错误页
+      error_pages:
+        - codes: [500, 502, 503, 504]
+          uri: /50x.html
+
+      locations:
+        - path: /
+          try_files: [$uri, $uri/, /index.html]
+
+        - path: /prod-api/
+          proxy_pass: http://localhost:19999/
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+          proxy_cookie_path:
+            - {from: /prod-api/, to: /}
+          client_max_body_size: 200m
+
+        - path: /tduck-api/
+          proxy_pass: http://localhost:19999/
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+          proxy_cookie_path:
+            - {from: /prod-api/, to: /}
+          client_max_body_size: 200m
+
+        - path: /sso-prod-api/
+          proxy_pass: http://localhost:19999/
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+          proxy_cookie_path:
+            - {from: /sso-prod-api/, to: /}
+
+        - path: /50x.html
+          match: exact
+          root: html
+
+    # AI 模型 / WebSocket（Upgrade 头由 gonx 自动处理，无需手写）
+    - listen: [12306]
+      server_name: [localhost]
+      locations:
+        - path: /
+          proxy_pass: http://172.16.200.113:50000
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+            X-Forwarded-Proto: $scheme
+
+# L4 代理示例（对应 nginx.conf 里注释掉的 stream 块）
+# stream:
+#   upstreams:
+#     udp_backend:
+#       servers:
+#         - address: 192.168.3.100:19100
+#   servers:
+#     - listen: 19100
+#       udp: true
+#       proxy_pass: udp_backend
+#       proxy_timeout: 10s
+#       proxy_responses: 1

@@ -1,0 +1,239 @@
+package server
+
+import (
+	"context"
+	"fmt"
+	"io"
+	"net/http"
+	"net/http/httptest"
+	"net/url"
+	"os"
+	"path/filepath"
+	"strings"
+	"testing"
+)
+
+func TestAddHeader(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "index.html"), "hi")
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    add_header X-Global always;
+    server {
+        listen 8080;
+        root "%s";
+        add_header X-From-Server server-val;
+        location / {
+            add_header X-From-Loc loc-val;
+        }
+    }
+}
+`, filepath.ToSlash(dir))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	// location add_header replaces server/http level (nginx inheritance)
+	if got := resp.Header.Get("X-From-Loc"); got != "loc-val" {
+		t.Errorf("X-From-Loc = %q", got)
+	}
+	if resp.Header.Get("X-From-Server") != "" || resp.Header.Get("X-Global") != "" {
+		t.Error("outer add_header should be shadowed by location-level directives")
+	}
+}
+
+func TestAllowDeny(t *testing.T) {
+	conf := `
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        location = /admin {
+            allow 127.0.0.1;
+            allow ::1;
+            deny all;
+            return 200 "admin ok";
+        }
+        location = /open {
+            return 200 "open";
+        }
+    }
+}
+`
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	// requests come from loopback → allowed
+	if code, body := get(t, ts, "/admin", ""); code != 200 || body != "admin ok" {
+		t.Errorf("loopback should be allowed: %d %q", code, body)
+	}
+	if code, _ := get(t, ts, "/open", ""); code != 200 {
+		t.Errorf("unrestricted location: %d", code)
+	}
+}
+
+func TestAuthBasic(t *testing.T) {
+	dir := t.TempDir()
+	// user "admin", apr1 hash of "secret123"
+	htpasswd := "admin:$apr1$saltsalt$AVDPWMuMvN31vdabhs8HK1\n"
+	hpPath := filepath.Join(dir, "htpasswd")
+	os.WriteFile(hpPath, []byte(htpasswd), 0600)
+
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        location / {
+            auth_basic "Restricted";
+            auth_basic_user_file "%s";
+            return 200 "authed";
+        }
+    }
+}
+`, filepath.ToSlash(hpPath))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	// no credentials → 401 with challenge
+	resp, _ := ts.Client().Get(ts.URL + "/")
+	resp.Body.Close()
+	if resp.StatusCode != 401 || !strings.Contains(resp.Header.Get("WWW-Authenticate"), "Restricted") {
+		t.Errorf("missing auth: %d %q", resp.StatusCode, resp.Header.Get("WWW-Authenticate"))
+	}
+	// correct credentials → 200
+	req, _ := http.NewRequest("GET", ts.URL+"/", nil)
+	req.SetBasicAuth("admin", "secret123")
+	resp2, _ := ts.Client().Do(req)
+	resp2.Body.Close()
+	if resp2.StatusCode != 200 {
+		t.Errorf("valid credentials: %d", resp2.StatusCode)
+	}
+	// wrong password → 401
+	req.SetBasicAuth("admin", "wrong")
+	resp3, _ := ts.Client().Do(req)
+	resp3.Body.Close()
+	if resp3.StatusCode != 401 {
+		t.Errorf("wrong password: %d", resp3.StatusCode)
+	}
+}
+
+func TestAutoindex(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "a.txt"), "A")
+	os.Mkdir(filepath.Join(dir, "sub"), 0755)
+
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        root "%s";
+        autoindex on;
+    }
+}
+`, filepath.ToSlash(dir))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	code, body := get(t, ts, "/", "")
+	if code != 200 || !strings.Contains(body, "Index of /") || !strings.Contains(body, "a.txt") || !strings.Contains(body, "sub/") {
+		t.Errorf("autoindex listing wrong: %d\n%s", code, body)
+	}
+}
+
+func TestNamedLocationTryFiles(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "exists.txt"), "static file")
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprintf(w, "backend handled %s", r.URL.Path)
+	}))
+	defer backend.Close()
+	bu, _ := url.Parse(backend.URL)
+
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        root "%s";
+        location / {
+            try_files $uri @backend;
+        }
+        location @backend {
+            proxy_pass http://%s;
+        }
+    }
+}
+`, filepath.ToSlash(dir), bu.Host)
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	if _, body := get(t, ts, "/exists.txt", ""); body != "static file" {
+		t.Errorf("existing file should be served statically: %q", body)
+	}
+	if _, body := get(t, ts, "/dynamic/path", ""); !strings.Contains(body, "backend handled") {
+		t.Errorf("missing file should fall back to @backend: %q", body)
+	}
+}
+
+func TestMapAndUpstreamAddr(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+	bu, _ := url.Parse(backend.URL)
+
+	logFile := filepath.Join(t.TempDir(), "access.log")
+	conf := fmt.Sprintf(`
+http {
+    error_log stderr crit;
+    log_format up '$upstream_addr $mapped';
+    map $request_method $mapped {
+        default other;
+        GET      got-get;
+    }
+    access_log "%s" up;
+    server {
+        listen 8080;
+        location / {
+            proxy_pass http://%s;
+        }
+    }
+}
+`, filepath.ToSlash(logFile), bu.Host)
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	get(t, ts, "/", "")
+	// flush by shutting down
+	inst.Shutdown(context.Background())
+
+	data, err := os.ReadFile(logFile)
+	if err != nil {
+		t.Fatal(err)
+	}
+	line := strings.TrimSpace(string(data))
+	if !strings.Contains(line, bu.Host) {
+		t.Errorf("$upstream_addr not logged: %q", line)
+	}
+	if !strings.Contains(line, "got-get") {
+		t.Errorf("$mapped (map GET) not resolved: %q", line)
+	}
+}
