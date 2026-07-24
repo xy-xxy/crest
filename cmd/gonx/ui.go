@@ -46,6 +46,13 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 		for _, a := range inst.Addrs {
 			addrs = append(addrs, a.Addr)
 		}
+		byAddr := make([]map[string]any, 0, len(addrs))
+		for _, as := range inst.StatsByAddr() {
+			byAddr = append(byAddr, map[string]any{
+				"addr": as.Addr, "total": as.Total,
+				"c2xx": as.C2xx, "c3xx": as.C3xx, "c4xx": as.C4xx, "c5xx": as.C5xx,
+			})
+		}
 		writeJSON(w, map[string]any{
 			"version": version,
 			"pid":     os.Getpid(),
@@ -58,6 +65,7 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 			"c3xx":    st.C3xx,
 			"c4xx":    st.C4xx,
 			"c5xx":    st.C5xx,
+			"byAddr":  byAddr,
 		})
 	}))
 
@@ -206,17 +214,26 @@ const uiHTML = `<!DOCTYPE html>
   --accent: #009639; --accent-ink: #ffffff;
   --danger: #c62828; --warn: #b26a00;
   --mono: ui-monospace, Consolas, "Courier New", monospace;
+  /* VS Code Light+ 配色 */
+  --tk-key: #0451a5; --tk-str: #a31515; --tk-com: #008000;
+  --tk-num: #098658; --tk-bool: #0000ff; --tk-var: #af00db;
+  --tk-pun: #0431fa;
 }
 @media (prefers-color-scheme: dark) {
   :root {
     --bg: #14181d; --surface: #1d232b; --border: #2c353f;
     --ink: #e4e9ee; --ink-2: #9aa8b6; --ink-3: #6b7885;
     --accent: #23b35c; --danger: #ef5350; --warn: #ffb74d;
+    /* VS Code Dark+ 配色 */
+    --tk-key: #9cdcfe; --tk-str: #ce9178; --tk-com: #6a9955;
+    --tk-num: #b5cea8; --tk-bool: #569cd6; --tk-var: #c586c0;
+    --tk-pun: #ffd700;
   }
 }
 * { box-sizing: border-box; margin: 0; }
 body { background: var(--bg); color: var(--ink); font: 14px/1.6 "Segoe UI", system-ui, sans-serif; padding: 24px; }
-.wrap { max-width: 980px; margin: 0 auto; display: grid; gap: 16px; }
+.wrap { max-width: 1160px; margin: 0 auto; display: grid; gap: 16px; }
+.wrap > * { min-width: 0; } /* 防止长行内容撑宽 grid 导致页面偏移 */
 header { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 header h1 { font-size: 20px; }
 header .meta { color: var(--ink-2); font-size: 13px; }
@@ -240,21 +257,71 @@ button.danger:hover { border-color: var(--danger); }
 .tabs { display: flex; gap: 4px; margin-bottom: 10px; }
 .tabs button { padding: 5px 14px; border-radius: 6px; font-size: 13px; }
 .tabs button.on { background: var(--accent); border-color: var(--accent); color: var(--accent-ink); }
+.dropdown { float: right; position: relative; font-weight: 400; }
+.dd-btn { display: inline-flex; align-items: center; gap: 8px; font-size: 12px;
+  font-variant-numeric: tabular-nums; padding: 5px 10px 5px 12px; min-width: 96px;
+  border: 1px solid var(--border); border-radius: 8px; background: var(--surface); color: var(--ink);
+  cursor: pointer; transition: border-color .12s, box-shadow .12s; }
+.dd-btn:hover { border-color: var(--ink-3); }
+.dropdown.open .dd-btn { border-color: var(--accent); box-shadow: 0 0 0 2px rgba(0,150,57,.18); }
+.dd-btn .cur { flex: 1; text-align: left; }
+.dd-btn .arw { width: 12px; height: 12px; flex: none; color: var(--ink-3); transition: transform .15s; }
+.dropdown.open .dd-btn .arw { transform: rotate(180deg); }
+.dd-menu { position: absolute; right: 0; top: calc(100% + 5px); z-index: 60; min-width: 100%;
+  max-height: 300px; overflow: auto; padding: 4px; background: var(--surface);
+  border: 1px solid var(--border); border-radius: 8px; box-shadow: 0 8px 28px rgba(0,0,0,.18); }
+.dd-menu button { display: flex; align-items: center; gap: 6px; width: 100%; text-align: left;
+  white-space: nowrap; padding: 6px 10px; border: none; border-radius: 6px; background: transparent;
+  color: var(--ink); font-size: 12px; font-variant-numeric: tabular-nums; cursor: pointer; }
+.dd-menu button:hover { background: var(--bg); }
+.dd-menu button.on { color: var(--accent); font-weight: 600; }
+.dd-menu button .ck { width: 12px; flex: none; opacity: 0; }
+.dd-menu button.on .ck { opacity: 1; }
 pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px; padding: 12px;
   font: 12px/1.5 var(--mono); overflow: auto; max-height: 320px; white-space: pre-wrap; word-break: break-all; }
-textarea { width: 100%; height: 320px; background: var(--bg); border: 1px solid var(--border);
-  border-radius: 8px; color: var(--ink); font: 13px/1.5 var(--mono); padding: 12px; resize: vertical; }
+.logbox { display: flex; border: 1px solid var(--border); border-radius: 8px; overflow: hidden;
+  height: 320px; background: var(--bg); }
+.logbox .gutter { padding: 12px 0; }
+#loglnums { font: 12px/1.5 var(--mono); color: var(--ink-3); text-align: right;
+  padding: 0 8px 0 12px; min-width: 2.6em; white-space: pre; user-select: none; }
+#log { flex: 1; min-width: 0; margin: 0; border: none; border-radius: 0; max-height: none;
+  white-space: pre; word-break: normal; background: transparent; }
+.editor { display: flex; height: 62vh; min-height: 420px; border: 1px solid var(--border);
+  border-radius: 8px; overflow: hidden; background: var(--bg); }
+.gutter { flex: none; padding: 14px 0; border-right: 1px solid var(--border); overflow: hidden;
+  background: var(--surface); }
+#lnums { font: 13px/1.6 var(--mono); color: var(--ink-3); text-align: right;
+  padding: 0 10px 0 14px; min-width: 3.2em; white-space: pre; user-select: none; }
+.edwrap { position: relative; flex: 1; overflow: hidden; min-width: 0; }
+#hl, #conf { position: absolute; inset: 0; margin: 0; padding: 14px; font: 13px/1.6 var(--mono);
+  white-space: pre; overflow: auto; tab-size: 2; border: none; border-radius: 0;
+  background: transparent; max-height: none; }
+#hl { pointer-events: none; color: var(--ink); }
+#hl .tk { color: var(--tk-key); } #hl .ts { color: var(--tk-str); }
+#hl .tc { color: var(--tk-com); font-style: italic; } #hl .tn { color: var(--tk-num); }
+#hl .tb { color: var(--tk-bool); } #hl .tv { color: var(--tk-var); }
+#hl .tp { color: var(--tk-pun); }
+#conf { color: transparent; caret-color: var(--ink); resize: none; outline: none; width: 100%; height: 100%; }
+#conf::selection { background: rgba(0, 150, 57, .28); color: transparent; }
 .help-btn { float: right; font-size: 12px; padding: 3px 10px; }
-.help { border: 1px solid var(--border); border-radius: 8px; padding: 12px; margin-bottom: 10px;
-  max-height: 360px; overflow: auto; background: var(--bg); }
+.help { position: fixed; top: 0; right: 0; bottom: 0; width: min(640px, 94vw); z-index: 50;
+  background: var(--surface); border-left: 1px solid var(--border);
+  box-shadow: -12px 0 32px rgba(0,0,0,.18); padding: 16px; overflow: auto; }
+.help-head { display: flex; align-items: center; justify-content: space-between; margin-bottom: 10px; }
+.help-head b { font-size: 15px; }
+.help-head button { padding: 2px 10px; font-size: 14px; line-height: 1.4; }
 .help input { width: 100%; padding: 6px 10px; margin-bottom: 8px; border: 1px solid var(--border);
   border-radius: 6px; background: var(--surface); color: var(--ink); font-size: 13px; }
 .help details { margin-bottom: 4px; }
 .help summary { cursor: pointer; font-weight: 600; font-size: 13px; padding: 4px 0; }
-.help table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 10px; }
-.help th, .help td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border); vertical-align: top; }
+.help table { width: 100%; border-collapse: collapse; font-size: 12px; margin: 6px 0 10px;
+  table-layout: fixed; }
+.help th, .help td { text-align: left; padding: 4px 8px; border-bottom: 1px solid var(--border);
+  vertical-align: top; word-break: break-word; overflow-wrap: anywhere; }
 .help th { color: var(--ink-3); font-weight: 600; }
-.help td:first-child { font-family: var(--mono); white-space: nowrap; }
+.help th:nth-child(1), .help td:nth-child(1) { width: 29%; }
+.help th:nth-child(2), .help td:nth-child(2) { width: 42%; }
+.help td:first-child { font-family: var(--mono); }
 .help td:last-child { font-family: var(--mono); color: var(--ink-2); }
 .help .note { font-size: 12px; color: var(--ink-2); margin: 4px 0 8px; }
 .msg { font-size: 13px; margin-left: 8px; }
@@ -272,7 +339,15 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
   </header>
 
   <div class="card">
-    <h2>请求统计（自本次启动）</h2>
+    <h2>请求统计（自本次启动）
+      <span class="dropdown" id="portdd">
+        <button type="button" class="dd-btn" onclick="toggleDD(event)">
+          <span class="cur" id="dd-label">全部端口</span>
+          <svg class="arw" viewBox="0 0 12 12"><path fill="none" stroke="currentColor" stroke-width="1.4"
+            stroke-linecap="round" stroke-linejoin="round" d="M2.5 4.5 6 8l3.5-3.5"/></svg>
+        </button>
+        <div class="dd-menu" id="dd-menu" hidden></div>
+      </span></h2>
     <div class="tiles">
       <div class="tile"><div class="num" id="t-total">–</div><div class="lbl">总请求</div></div>
       <div class="tile"><div class="num" id="t-2xx">–</div><div class="lbl">2xx 成功</div></div>
@@ -300,17 +375,48 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <button data-log="console" onclick="pickLog(this)">console.log</button>
       <label class="auto"><input type="checkbox" id="auto" checked> 自动刷新</label>
     </div>
-    <pre id="log">载入中…</pre>
+    <div class="logbox">
+      <div class="gutter"><div id="loglnums">1</div></div>
+      <pre id="log" onscroll="logSync()">载入中…</pre>
+    </div>
   </div>
 
   <div class="card">
     <h2>配置文件 <code id="conf-path"></code>
       <button class="help-btn" onclick="toggleHelp()">配置帮助</button></h2>
     <div id="help" class="help" hidden>
+      <div class="help-head"><b>配置帮助</b><button onclick="toggleHelp()" title="关闭">✕</button></div>
       <input id="help-q" placeholder="搜索配置项，如 proxy_pass、limit、ssl…" oninput="filterHelp()">
       <div class="note">单位：大小 <b>1k / 200m / 1g</b>；时间 <b>30s / 10m / 2h / 1d</b>；速率 <b>5r/s / 60r/m</b>。未知字段会在保存校验时直接报错。</div>
 
-      <details open><summary>顶层结构</summary>
+      <details open><summary>配置示例（80 端口 + 管理页面）</summary>
+<pre># 最小可用示例：静态站 + SPA 回落 + 反向代理
+ui:
+  listen: 127.0.0.1:8899        # 管理页面固定地址
+  token: my-secret              # 访问令牌（不写则每次随机）
+  open: true                    # 启动时自动打开浏览器
+
+error_log: {path: stderr, level: info}
+
+http:
+  servers:
+    - listen: [80]
+      server_name: [example.com]
+      locations:
+        - path: /                          # 静态站 + SPA 回落
+          root: D:/www/dist
+          try_files: [$uri, $uri/, /index.html]
+
+        - path: /api/                      # 反向代理到后端
+          proxy_pass: http://127.0.0.1:8080/
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for</pre>
+      <div class="note">保存为 gonx.yml 后运行 gonx.exe -c gonx.yml 即可。注意 Windows/Linux 上监听 80 端口可能需要管理员/root 权限。</div>
+      </details>
+
+      <details><summary>顶层结构</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>ui</td><td>管理页面：固定端口/令牌/自动打开（改后需重启）</td><td>listen: 127.0.0.1:8899</td></tr>
       <tr><td>error_log</td><td>进程错误日志路径与级别（debug/info/warn/error）</td><td>{path: stderr, level: info}</td></tr>
@@ -328,7 +434,7 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <tr><td>maps</td><td>变量映射（支持 ~正则 / ~*忽略大小写 / default）</td><td>{source: $host, target: $pool, cases: {...}}</td></tr>
       <tr><td>root / index / autoindex …</td><td>可在 http 层给出默认值，server/location 就近覆盖</td><td></td></tr></table></details>
 
-      <details><summary>server（虚拟主机）</summary>
+      <details><summary>servers（虚拟主机列表）</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>listen</td><td>监听端口；标量或带 ssl/default 的映射</td><td>[8080, {address: 443, ssl: true, default: true}]</td></tr>
       <tr><td>server_name</td><td>按 Host 匹配：精确 / *.foo / foo.* / ~正则</td><td>[example.com, "*.example.org"]</td></tr>
@@ -338,7 +444,7 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <tr><td>rewrites</td><td>server 级重写，location 匹配前执行</td><td>见 location</td></tr>
       <tr><td>locations</td><td>路由规则列表</td><td></td></tr></table></details>
 
-      <details><summary>location（路由）</summary>
+      <details><summary>locations（路由列表）</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>path + match</td><td>匹配方式：prefix(默认) / exact / regex / regex_i / prefix_priority（对应 nginx 空 / = / ~ / ~* / ^~）</td><td>{path: /ping, match: exact}</td></tr>
       <tr><td>path: "@名字"</td><td>命名 location，仅由 try_files 跳转进入</td><td>try_files: [$uri, "@backend"]</td></tr>
@@ -362,7 +468,7 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <tr><td>proxy_connect_timeout / proxy_read_timeout</td><td>连接/读后端超时</td><td>proxy_read_timeout: 300s</td></tr>
       <tr><td>gzip</td><td>同 http 层，可局部覆盖</td><td>{enabled: false}</td></tr></table></details>
 
-      <details><summary>upstream（负载均衡）</summary>
+      <details><summary>upstreams（负载均衡）</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>balancer</td><td>round_robin(默认加权轮询) / least_conn / ip_hash</td><td>balancer: least_conn</td></tr>
       <tr><td>servers[].address</td><td>后端地址（无端口默认 :80）</td><td>127.0.0.1:9001</td></tr>
@@ -388,7 +494,14 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <tr><td>$upstream_addr</td><td>实际服务的后端地址（日志用）</td><td></td></tr>
       <tr><td>$request_time / $status …</td><td>log_formats 专用：耗时、状态码、字节数等</td><td>$body_bytes_sent</td></tr></table></details>
     </div>
-    <textarea id="conf" spellcheck="false"></textarea>
+    <div class="editor">
+      <div class="gutter"><div id="lnums">1</div></div>
+      <div class="edwrap">
+        <pre id="hl" aria-hidden="true"></pre>
+        <textarea id="conf" spellcheck="false" autocomplete="off" autocapitalize="off"
+          oninput="edUpdate()" onscroll="edSync()" onkeydown="edKey(event)"></textarea>
+      </div>
+    </div>
     <div class="row btns" style="margin-top:10px">
       <button onclick="saveConf(false, this)">校验并保存</button>
       <button class="primary" onclick="saveConf(true, this)">保存并重载</button>
@@ -405,23 +518,79 @@ function fmtUp(s) {
   return (d? d+'天 ':'') + (h? h+'时 ':'') + m + '分';
 }
 
+let lastStatus = null;
+
 async function refreshStatus() {
   try {
     const r = await fetch('/api/status');
     if (!r.ok) throw 0;
     const s = await r.json();
     alive = true;
+    lastStatus = s;
     document.getElementById('dot').className = 'dot';
     document.getElementById('meta').textContent =
       'gonx/' + s.version + ' · pid ' + s.pid + ' · 运行 ' + fmtUp(s.uptime) +
       ' · HTTP ' + s.addrs.join(', ') + (s.streams.length ? ' · L4 ' + s.streams.join(', ') : '');
-    for (const k of ['total','2xx','3xx','4xx','5xx'])
-      document.getElementById('t-'+k).textContent = s[k === 'total' ? 'total' : 'c'+k];
+    const menu = document.getElementById('dd-menu');
+    const want = s.addrs.join('|');
+    if (menu.dataset.opts !== want) {   // 监听地址变化(如reload)时重建选项,保留选中值
+      if (curPort && !s.addrs.includes(curPort)) curPort = '';
+      const check = '<svg class="ck" viewBox="0 0 12 12" width="12" height="12"><path fill="none" ' +
+        'stroke="currentColor" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round" ' +
+        'd="M2.5 6.2 5 8.7l4.5-5"/></svg>';
+      const item = (val, label) => '<button data-port="' + val + '" onclick="pickPort(this)">' +
+        check + '<span>' + label + '</span></button>';
+      menu.innerHTML = item('', '全部端口') + s.addrs.map(a => item(a, a)).join('');
+      menu.dataset.opts = want;
+      syncPortUI();
+    }
+    renderStats();
   } catch (e) {
     alive = false;
     document.getElementById('dot').className = 'dot stopped';
     document.getElementById('meta').textContent = '服务已停止或不可达';
   }
+}
+
+let curPort = '';
+
+function toggleDD(e) {
+  e.stopPropagation();
+  document.getElementById('portdd').classList.toggle('open');
+  document.getElementById('dd-menu').hidden = !document.getElementById('portdd').classList.contains('open');
+}
+
+function closeDD() {
+  document.getElementById('portdd').classList.remove('open');
+  document.getElementById('dd-menu').hidden = true;
+}
+
+function pickPort(btn) {
+  curPort = btn.dataset.port;
+  closeDD();
+  syncPortUI();
+  renderStats();
+}
+
+// 同步下拉按钮文字与菜单项选中态
+function syncPortUI() {
+  document.getElementById('dd-label').textContent = curPort || '全部端口';
+  document.querySelectorAll('#dd-menu button').forEach(b =>
+    b.className = b.dataset.port === curPort ? 'on' : '');
+}
+
+document.addEventListener('click', e => {
+  if (!e.target.closest('#portdd')) closeDD();
+});
+
+function renderStats() {
+  if (!lastStatus) return;
+  let s = lastStatus;
+  if (curPort) {
+    s = (lastStatus.byAddr || []).find(x => x.addr === curPort) || {total:0,c2xx:0,c3xx:0,c4xx:0,c5xx:0};
+  }
+  for (const k of ['total','2xx','3xx','4xx','5xx'])
+    document.getElementById('t-'+k).textContent = s[k === 'total' ? 'total' : 'c'+k];
 }
 
 async function refreshLog(force) {
@@ -431,9 +600,24 @@ async function refreshLog(force) {
     // 仅当用户本来就贴在底部时才跟随滚动，翻历史时不打断
     const stick = pre.scrollHeight - pre.scrollTop - pre.clientHeight < 30;
     const r = await fetch('/api/logs?name=' + curLog);
-    pre.textContent = (await r.text()) || '(空)';
+    const txt = (await r.text()) || '(空)';
+    pre.textContent = txt;
+    document.getElementById('loglnums').textContent = lineNums(txt);
     if (force || stick) pre.scrollTop = pre.scrollHeight;
+    logSync();
   } catch (e) {}
+}
+
+function lineNums(txt) {
+  const n = txt.split('\n').length;
+  const out = [];
+  for (let i = 1; i <= n; i++) out.push(i);
+  return out.join('\n');
+}
+
+function logSync() {
+  const pre = document.getElementById('log');
+  document.getElementById('loglnums').style.transform = 'translateY(' + (-pre.scrollTop) + 'px)';
 }
 
 function pickLog(btn) {
@@ -465,6 +649,84 @@ async function loadConf() {
   const c = await r.json();
   document.getElementById('conf-path').textContent = c.path;
   document.getElementById('conf').value = c.content;
+  edUpdate();
+}
+
+// ---- VS Code 风格编辑器：高亮层 + 透明文本框叠加 ----
+
+function escHTML(s) {
+  return s.replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+}
+
+// 按行做 YAML 高亮：键名、字符串、注释、数字/单位、布尔、$变量。
+// 先用控制字符占位标记 token，最后统一替换成 <span>，避免后续正则
+// 匹配到已生成的 HTML 标记本身（比如 class="tk" 里的引号）。
+function hlYAML(src) {
+  return escHTML(src).split('\n').map(function (line) {
+    let keyed = line.replace(/^(\s*(?:-\s+)?)([A-Za-z_][\w.-]*)(:)(?=\s|$)/,
+      function (m, p1, p2, p3) { return p1 + '\u0001' + p2 + '\u0007' + p3; });
+    // 流式映射里的行内属性名：{from: x, to: y}
+    keyed = keyed.replace(/([{,]\s*)([A-Za-z_][\w.-]*)(:)(?=\s)/g,
+      function (m, p1, p2, p3) { return p1 + '\u0001' + p2 + '\u0007' + p3; });
+    keyed = keyed.replace(
+      /(#.*$)|('[^']*')|("[^"]*")|(\$\{?[A-Za-z_]\w*\}?)|(\b\d+(?:\.\d+)?(?:k|m|g|ms|s|h|d|r\/s|r\/m)?\b)|(\b(?:true|false|on|off|null)\b)|([{}\[\]])/g,
+      function (m, c, s1, s2, v, n, b, p) {
+        if (c) return '\u0002' + c + '\u0007';
+        if (s1 || s2) return '\u0003' + m + '\u0007';
+        if (v) return '\u0004' + m + '\u0007';
+        if (n) return '\u0005' + m + '\u0007';
+        if (b) return '\u0006' + m + '\u0007';
+        return '\u0008' + m + '\u0007';
+      });
+    return keyed
+      .replace(/\u0001/g, '<span class="tk">')
+      .replace(/\u0002/g, '<span class="tc">')
+      .replace(/\u0003/g, '<span class="ts">')
+      .replace(/\u0004/g, '<span class="tv">')
+      .replace(/\u0005/g, '<span class="tn">')
+      .replace(/\u0006/g, '<span class="tb">')
+      .replace(/\u0008/g, '<span class="tp">')
+      .replace(/\u0007/g, '</span>');
+  }).join('\n');
+}
+
+function edUpdate() {
+  const ta = document.getElementById('conf');
+  document.getElementById('hl').innerHTML = hlYAML(ta.value) + '\n';
+  document.getElementById('lnums').textContent = lineNums(ta.value);
+  edSync();
+}
+
+function edSync() {
+  const ta = document.getElementById('conf');
+  const hl = document.getElementById('hl');
+  hl.scrollTop = ta.scrollTop;
+  hl.scrollLeft = ta.scrollLeft;
+  document.getElementById('lnums').style.transform = 'translateY(' + (-ta.scrollTop) + 'px)';
+}
+
+function edInsert(ta, text) {
+  // execCommand 保留撤销历史；不可用时退回手动拼接
+  if (!document.execCommand || !document.execCommand('insertText', false, text)) {
+    const s = ta.selectionStart, e = ta.selectionEnd;
+    ta.value = ta.value.slice(0, s) + text + ta.value.slice(e);
+    ta.selectionStart = ta.selectionEnd = s + text.length;
+  }
+  edUpdate();
+}
+
+function edKey(e) {
+  const ta = e.target;
+  if (e.key === 'Tab') {
+    e.preventDefault();
+    edInsert(ta, '  ');
+  } else if (e.key === 'Enter') {
+    e.preventDefault();
+    const v = ta.value, s = ta.selectionStart;
+    const lineStart = v.lastIndexOf('\n', s - 1) + 1;
+    const indent = (v.slice(lineStart, s).match(/^\s*/) || [''])[0];
+    edInsert(ta, '\n' + indent);
+  }
 }
 
 async function saveConf(reload, btn) {
@@ -495,14 +757,21 @@ function toggleHelp() {
 
 function filterHelp() {
   const q = document.getElementById('help-q').value.trim().toLowerCase();
-  document.querySelectorAll('#help details').forEach(d => {
+  document.querySelectorAll('#help details').forEach((d, idx) => {
     if (!q) {
       d.style.display = '';
-      d.open = d.querySelector('summary').textContent === '顶层结构';
+      d.open = idx === 0; // 默认只展开配置示例
       d.querySelectorAll('tr').forEach(tr => tr.style.display = '');
       return;
     }
     const rows = d.querySelectorAll('tr');
+    if (rows.length === 0) {
+      // 无表格的分组（如配置示例）按整体文本匹配
+      const hit = d.textContent.toLowerCase().includes(q);
+      d.style.display = hit ? '' : 'none';
+      d.open = hit;
+      return;
+    }
     let any = false;
     rows.forEach((tr, i) => {
       if (i === 0) return; // header row

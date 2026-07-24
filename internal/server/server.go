@@ -41,8 +41,7 @@ type Instance struct {
 	streams       []*stream.Server
 	maps          []compiledMap
 
-	started                             time.Time
-	stTotal, st2xx, st3xx, st4xx, st5xx int64 // atomic request counters
+	started time.Time
 }
 
 // Stats is a snapshot of request counters since this instance started.
@@ -55,15 +54,43 @@ type Stats struct {
 	C5xx    int64
 }
 
+// AddrStats is one listen address's counters, for per-port filtering.
+type AddrStats struct {
+	Addr  string
+	Total int64
+	C2xx  int64
+	C3xx  int64
+	C4xx  int64
+	C5xx  int64
+}
+
+// Stats aggregates counters across all listen addresses.
 func (i *Instance) Stats() Stats {
-	return Stats{
-		Started: i.started,
-		Total:   atomic.LoadInt64(&i.stTotal),
-		C2xx:    atomic.LoadInt64(&i.st2xx),
-		C3xx:    atomic.LoadInt64(&i.st3xx),
-		C4xx:    atomic.LoadInt64(&i.st4xx),
-		C5xx:    atomic.LoadInt64(&i.st5xx),
+	s := Stats{Started: i.started}
+	for _, a := range i.Addrs {
+		s.Total += atomic.LoadInt64(&a.stTotal)
+		s.C2xx += atomic.LoadInt64(&a.st2xx)
+		s.C3xx += atomic.LoadInt64(&a.st3xx)
+		s.C4xx += atomic.LoadInt64(&a.st4xx)
+		s.C5xx += atomic.LoadInt64(&a.st5xx)
 	}
+	return s
+}
+
+// StatsByAddr returns per-listen-address counters in listener order.
+func (i *Instance) StatsByAddr() []AddrStats {
+	out := make([]AddrStats, 0, len(i.Addrs))
+	for _, a := range i.Addrs {
+		out = append(out, AddrStats{
+			Addr:  a.Addr,
+			Total: atomic.LoadInt64(&a.stTotal),
+			C2xx:  atomic.LoadInt64(&a.st2xx),
+			C3xx:  atomic.LoadInt64(&a.st3xx),
+			C4xx:  atomic.LoadInt64(&a.st4xx),
+			C5xx:  atomic.LoadInt64(&a.st5xx),
+		})
+	}
+	return out
 }
 
 // StreamAddrs lists the L4 listener addresses for status display.
@@ -82,6 +109,8 @@ type AddrServer struct {
 	inst    *Instance
 	http    *http.Server
 	tlsConf *tls.Config
+
+	stTotal, st2xx, st3xx, st4xx, st5xx int64 // atomic request counters
 }
 
 // Options configures runtime log routing. When set and the config does not
@@ -649,16 +678,16 @@ func (a *AddrServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	if status == 0 {
 		status = http.StatusOK
 	}
-	atomic.AddInt64(&a.inst.stTotal, 1)
+	atomic.AddInt64(&a.stTotal, 1)
 	switch {
 	case status < 300:
-		atomic.AddInt64(&a.inst.st2xx, 1)
+		atomic.AddInt64(&a.st2xx, 1)
 	case status < 400:
-		atomic.AddInt64(&a.inst.st3xx, 1)
+		atomic.AddInt64(&a.st3xx, 1)
 	case status < 500:
-		atomic.AddInt64(&a.inst.st4xx, 1)
+		atomic.AddInt64(&a.st4xx, 1)
 	default:
-		atomic.AddInt64(&a.inst.st5xx, 1)
+		atomic.AddInt64(&a.st5xx, 1)
 	}
 	al := a.inst.defaultAccess
 	if v != nil && v.accessSet {
