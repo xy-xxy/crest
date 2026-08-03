@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.4.1-009639)
+![Version](https://img.shields.io/badge/version-v0.4.2-009639)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-7%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-009639)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.4.1**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.4.2**
 
 gonx is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a

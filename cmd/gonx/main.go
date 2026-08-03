@@ -24,7 +24,7 @@ import (
 	"gonx/internal/server"
 )
 
-const version = "0.4.1"
+const version = "0.4.2"
 
 func main() {
 	server.Version = version

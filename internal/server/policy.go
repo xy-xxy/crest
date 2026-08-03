@@ -219,6 +219,111 @@ func (w *expiresWriter) Flush() {
 	}
 }
 
+// refererCheck holds compiled valid_referers rules for one location/server.
+type refererCheck struct {
+	none        bool // "none" — no Referer header
+	blocked     bool // "blocked" — Referer present but scheme stripped
+	serverNames bool // "server_names" — match this server's names
+	exact       map[string]bool
+	wildPrefix  []string // ".example.com" form → suffix match on host
+	wildSuffix  []string // "www." form → prefix match on host
+	regexes     []*regexp.Regexp
+	names       []string // the vhost's server_name values (for server_names)
+}
+
+func compileReferers(rules, serverNames []string) (*refererCheck, error) {
+	rc := &refererCheck{exact: map[string]bool{}, names: serverNames}
+	for _, r := range rules {
+		switch {
+		case r == "none":
+			rc.none = true
+		case r == "blocked":
+			rc.blocked = true
+		case r == "server_names":
+			rc.serverNames = true
+		case strings.HasPrefix(r, "~"):
+			re, err := regexp.Compile(r[1:])
+			if err != nil {
+				return nil, fmt.Errorf("valid_referers: invalid regex %q: %v", r, err)
+			}
+			rc.regexes = append(rc.regexes, re)
+		case strings.HasPrefix(r, "*."):
+			rc.wildPrefix = append(rc.wildPrefix, r[1:]) // ".example.com"
+		case strings.HasSuffix(r, ".*"):
+			rc.wildSuffix = append(rc.wildSuffix, r[:len(r)-1]) // "www."
+		default:
+			rc.exact[strings.ToLower(r)] = true
+		}
+	}
+	return rc, nil
+}
+
+// valid reports whether the request's Referer is allowed.
+func (rc *refererCheck) valid(r *http.Request) bool {
+	ref := r.Header.Get("Referer")
+	if ref == "" {
+		return rc.none
+	}
+	rest := ref
+	if s := strings.TrimPrefix(strings.TrimPrefix(ref, "https://"), "http://"); s != ref {
+		rest = s
+	} else {
+		// no scheme → "blocked"
+		return rc.blocked
+	}
+	host := rest
+	if i := strings.IndexAny(host, "/:"); i >= 0 {
+		host = host[:i]
+	}
+	host = strings.ToLower(host)
+	for _, re := range rc.regexes {
+		if re.MatchString(ref) {
+			return true
+		}
+	}
+	if rc.exact[host] {
+		return true
+	}
+	for _, suf := range rc.wildPrefix {
+		if host == suf[1:] || strings.HasSuffix(host, suf) {
+			return true
+		}
+	}
+	for _, pre := range rc.wildSuffix {
+		if strings.HasPrefix(host, pre) {
+			return true
+		}
+	}
+	if rc.serverNames {
+		for _, n := range rc.names {
+			if strings.EqualFold(strings.TrimPrefix(n, "*."), host) ||
+				(strings.HasPrefix(n, "*.") && strings.HasSuffix(host, n[1:])) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+// wrapValidReferers rejects requests whose Referer fails the rules with 403,
+// the common anti-hotlinking use of valid_referers + $invalid_referer.
+func (i *Instance) wrapValidReferers(h http.Handler, rules, serverNames []string) (http.Handler, error) {
+	if len(rules) == 0 {
+		return h, nil
+	}
+	rc, err := compileReferers(rules, serverNames)
+	if err != nil {
+		return nil, err
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if !rc.valid(r) {
+			http.Error(w, "403 Forbidden", http.StatusForbidden)
+			return
+		}
+		h.ServeHTTP(w, r)
+	}), nil
+}
+
 // compiledMap resolves one http-level map block per request.
 type compiledMap struct {
 	src, dst string

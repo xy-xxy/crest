@@ -69,6 +69,9 @@ type HTTP struct {
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
+	LimitRate           *int64 // bytes/sec, 0 = unlimited
+	LimitRateAfter      *int64 // bytes sent before limiting starts
+	GzipStatic          *bool
 }
 
 // Expires is a parsed "expires" directive (ngx_http_headers_module).
@@ -84,10 +87,11 @@ type ProxyRedirect struct {
 }
 
 type Upstream struct {
-	Name     string
-	Servers  []UpstreamServer
-	Balancer string // "", "least_conn", "ip_hash"
-	Line     int
+	Name      string
+	Servers   []UpstreamServer
+	Balancer  string // "", "least_conn", "ip_hash"
+	Keepalive int    // idle keep-alive connections to backends; 0 = default
+	Line      int
 }
 
 type LimitReqZone struct {
@@ -172,6 +176,10 @@ type Server struct {
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
+	LimitRate           *int64
+	LimitRateAfter      *int64
+	GzipStatic          *bool
+	ValidReferers       []string
 	Line                int
 }
 
@@ -209,6 +217,10 @@ type Location struct {
 	ProxyRedirects      []ProxyRedirect
 	HideHeaders         []string
 	PassHeaders         []string
+	LimitRate           *int64
+	LimitRateAfter      *int64
+	GzipStatic          *bool
+	ValidReferers       []string
 	Line                int
 }
 
@@ -591,6 +603,24 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, errDirective(d, err.Error())
 			}
 			h.SSLProtocols = d.Args
+		case "limit_rate":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			h.LimitRate = &n
+		case "limit_rate_after":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			h.LimitRateAfter = &n
+		case "gzip_static":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			h.GzipStatic = b
 		case "proxy_send_timeout", "default_type", "sendfile", "keepalive_timeout",
 			"tcp_nopush", "tcp_nodelay", "types_hash_max_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -757,6 +787,29 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, errDirective(d, err.Error())
 			}
 			s.SSLProtocols = d.Args
+		case "limit_rate":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			s.LimitRate = &n
+		case "limit_rate_after":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			s.LimitRateAfter = &n
+		case "gzip_static":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			s.GzipStatic = b
+		case "valid_referers":
+			if len(d.Args) == 0 {
+				return nil, errDirective(d, "needs at least one referer rule")
+			}
+			s.ValidReferers = append(s.ValidReferers, d.Args...)
 		case "proxy_send_timeout", "keepalive_timeout", "tcp_nopush", "tcp_nodelay",
 			"sendfile", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -941,6 +994,29 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 				return nil, errDirective(d, "needs exactly one argument")
 			}
 			loc.PassHeaders = append(loc.PassHeaders, d.Args[0])
+		case "limit_rate":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.LimitRate = &n
+		case "limit_rate_after":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.LimitRateAfter = &n
+		case "gzip_static":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.GzipStatic = b
+		case "valid_referers":
+			if len(d.Args) == 0 {
+				return nil, errDirective(d, "needs at least one referer rule")
+			}
+			loc.ValidReferers = append(loc.ValidReferers, d.Args...)
 		case "proxy_send_timeout", "proxy_buffering", "proxy_http_version", "chunked_transfer_encoding",
 			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -1010,6 +1086,17 @@ func loadUpstream(cfg *Config, ud *Directive) (*Upstream, error) {
 			up.Servers = append(up.Servers, us)
 		case "least_conn", "ip_hash":
 			up.Balancer = d.Name
+		case "keepalive":
+			if len(d.Args) != 1 {
+				return nil, errDirective(d, "needs exactly one argument")
+			}
+			n, err := strconv.Atoi(d.Args[0])
+			if err != nil || n < 0 {
+				return nil, errDirective(d, fmt.Sprintf("invalid keepalive %q", d.Args[0]))
+			}
+			up.Keepalive = n
+		case "keepalive_timeout", "keepalive_requests":
+			// accepted; Go's transport manages idle-conn lifetime
 		default:
 			cfg.warnf(d, "unknown directive %q in upstream block (ignored)", d.Name)
 		}

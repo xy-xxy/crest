@@ -4,6 +4,19 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.4.2
+
+**nginx parity (batch 2):**
+
+- `limit_rate` / `limit_rate_after` — response bandwidth throttling; the first N
+  bytes go full-speed, the rest are paced to the rate.
+- `valid_referers` — anti-hotlinking: an invalid `Referer` gets 403; rules support
+  `none` / `blocked` / `server_names` / domains (`*.foo.com`) / `~regex`.
+- upstream `keepalive` — idle connection pool to backends (connection reuse, less
+  handshake overhead under load).
+- `gzip_static` — serve a precompressed `<file>.gz` when it exists and the client
+  accepts gzip, skipping on-the-fly compression.
+
 ## v0.4.1
 
 **nginx parity (batch 1):**

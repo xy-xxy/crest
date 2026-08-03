@@ -207,6 +207,7 @@ const uiHTML = `<!DOCTYPE html>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>gonx 控制台</title>
+<link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACsUlEQVR4nMSXTWgTURDH/83GJpaGRqqQthZXRBR60JQWFaSNXgwWJEcPfgRz9JLeAiJG6sHjFkS8ROPRi6QHxV7StaVSscQPECo9dIvatNTWxkgaa6syDxfi5u1HGrP53fLeZOf/dmbe7DihslNowem2KI7vCaPVLaIWrBQVTC0nkc5KWN/K0VID29jbdATRLhlNTm9NHGspbK5Beh/Ap8LbBnbyoW7FNuelIq5nRAFnOmLo2hW01Tmxw+HG5q+igEsHkrafXqXVJTorTbh9Hh9CYh+O7j4I0dPG1pR8Fm++zCKljGM+v1iBALfYgLsnflux7W/3I94TQaCj29BO/pxBfDqB5wuvLWmwJOBGTwTx3oilB6rEXyVwczphaucwM3hw6lrFzpmA3gj7b1UC6OThwwMVO1fxujxoaWw2tHHqbbCY65w8OfMEqblxyH/jHGj3I7S/7x+x0rtHGJwcNhWpmwNj5+6UJdzajzxCz2K6CUaiU8HbiE4O4+GHp6bOdQVQqSkXHpcZB0auWs5uq3BDQHWuhV47zznliRXkhQz3/1wBdMlooZjzsFohyRkfVwC3CtQbrhS5ylfPe6auADvhCqC7XQuVWjXwngm9HKDGooXqfESZKFunK9cKlIQ86l6G3BBQS6WupoUumX6DUNDe1yujuHzorGUBAgY647wNipm2D7idLrYmenzs92JhFW6hEcHOY4j5L0I6GWU2FC6vqxmjH1+aCjBsx9tpw6XQ3RFO30Ju47uujWEZUj+nG3C7UO8wcg6jEKiomW/2JaSFqmPwRRXdUEtdP8lK+a8fpUzAkH+uZqOYGStFxcFmtXoxtZx0sEGRxiS7IZ/prORgUyoNinaKUIfT9a2cwBa+/VzCxNI9mtVoXKrZqEbj+VhWwv3Z81jdmKelPwEAAP//9W0em/Nyz1MAAAAASUVORK5CYII=">
 <style>
 :root {
   --bg: #f6f7f9; --surface: #ffffff; --border: #e3e6ea;
@@ -562,6 +563,9 @@ stream:
       <tr><td>proxy_redirect</td><td>改写后端 3xx 的 Location 头前缀；off 关闭，缺省按 proxy_pass→location 自动改</td><td>[{from: 'http://backend/', to: /api/}]</td></tr>
       <tr><td>proxy_hide_header / proxy_pass_header</td><td>隐藏 / 放行后端响应头（默认已隐藏 Date/Server/X-Accel-*）</td><td>proxy_hide_header: [X-Secret]</td></tr>
       <tr><td>expires</td><td>加缓存头：时长(30d) / off / epoch / max / 负值(no-cache)</td><td>expires: 7d</td></tr>
+      <tr><td>limit_rate / limit_rate_after</td><td>响应带宽限速；前 N 字节不限速</td><td>limit_rate: 200k</td></tr>
+      <tr><td>gzip_static</td><td>存在 &lt;文件&gt;.gz 且客户端支持时直接发预压缩文件</td><td>gzip_static: true</td></tr>
+      <tr><td>valid_referers</td><td>防盗链：非法 Referer 返回 403；规则 none/blocked/server_names/域名/~正则</td><td>[none, server_names, "*.trusted.com"]</td></tr>
       <tr><td>return</td><td>直接响应；30x + body 为跳转</td><td>{code: 200, body: "ok $scheme"}</td></tr>
       <tr><td>rewrites</td><td>正则重写；flag: last / break / redirect / permanent；$1-$9 捕获组</td><td>{pattern: "^/old/(.*)$", replacement: /new/$1, flag: permanent}</td></tr>
       <tr><td>try_files</td><td>依次探测文件，末项为兜底（URI / =404 / @named）；SPA 常用</td><td>[$uri, $uri/, /index.html]</td></tr>
@@ -582,6 +586,7 @@ stream:
       <details><summary>upstreams（负载均衡）</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>balancer</td><td>round_robin(默认加权轮询) / least_conn / ip_hash</td><td>balancer: least_conn</td></tr>
+      <tr><td>keepalive</td><td>到后端的空闲长连接数（连接复用，降低握手开销）</td><td>keepalive: 32</td></tr>
       <tr><td>servers[].address</td><td>后端地址（无端口默认 :80）</td><td>127.0.0.1:9001</td></tr>
       <tr><td>weight</td><td>权重，默认 1</td><td>weight: 3</td></tr>
       <tr><td>max_fails / fail_timeout</td><td>窗口内失败 N 次摘除 fail_timeout（默认 1 次 / 10s）</td><td>max_fails: 2, fail_timeout: 30s</td></tr>

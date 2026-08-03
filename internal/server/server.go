@@ -8,6 +8,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/url"
 	"path/filepath"
 	"sort"
 	"strings"
@@ -327,16 +328,24 @@ func (i *Instance) buildVHost(sv *config.Server, pools map[string]upstream.Pool)
 	}
 	if !hasPlainRoot {
 		// nginx serves unmatched requests from the server context
-		st := &handler.Static{Root: root, Prefix: "/", Index: index, Autoindex: boolOr(sv.Autoindex, i.cfg.HTTP.Autoindex), ErrLog: i.errLog}
+		st := &handler.Static{Root: root, Prefix: "/", Index: index, Autoindex: boolOr(sv.Autoindex, i.cfg.HTTP.Autoindex), GzipStatic: boolOr(sv.GzipStatic, i.cfg.HTTP.GzipStatic), ErrLog: i.errLog}
 		var hd http.Handler = handler.WrapGzip(st, resolveGzip(i.cfg.HTTP.Gzip, sv.Gzip, config.GzipSettings{}))
 		hd = wrapAddHeaders(hd, pickHeaders(i.cfg.HTTP.AddHeaders, sv.AddHeaders, nil))
 		hd = wrapExpires(hd, resolveExpires(i.cfg.HTTP.Expires, sv.Expires, nil))
+		if rate, after := resolveRate(i.cfg.HTTP, sv, nil); rate > 0 {
+			hd = handler.WrapLimitRate(hd, rate, after)
+		}
 		hd, err := i.wrapLimits(hd, sv, nil, nil)
 		if err != nil {
 			return nil, err
 		}
 		if n := resolveMaxBody(i.cfg.HTTP, sv, nil); n > 0 {
 			hd = wrapBodyLimit(hd, n)
+		}
+		if len(sv.ValidReferers) > 0 {
+			if hd, err = i.wrapValidReferers(hd, sv.ValidReferers, sv.ServerNames); err != nil {
+				return nil, err
+			}
 		}
 		if hd, err = i.applyPolicies(hd, sv, nil); err != nil {
 			return nil, err
@@ -435,6 +444,9 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 	hd = handler.WrapGzip(hd, resolveGzip(i.cfg.HTTP.Gzip, sv.Gzip, loc.Gzip))
 	hd = wrapAddHeaders(hd, pickHeaders(i.cfg.HTTP.AddHeaders, sv.AddHeaders, loc.AddHeaders))
 	hd = wrapExpires(hd, resolveExpires(i.cfg.HTTP.Expires, sv.Expires, loc.Expires))
+	if rate, after := resolveRate(i.cfg.HTTP, sv, loc); rate > 0 {
+		hd = handler.WrapLimitRate(hd, rate, after)
+	}
 	hd, err = i.wrapLimits(hd, sv, loc.LimitReq, loc.LimitConn)
 	if err != nil {
 		return nil, fmt.Errorf("location %q: %w", loc.Pattern, err)
@@ -442,11 +454,43 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 	if n := resolveMaxBody(i.cfg.HTTP, sv, loc); n > 0 {
 		hd = wrapBodyLimit(hd, n)
 	}
+	if refs := firstReferers(loc.ValidReferers, sv.ValidReferers); len(refs) > 0 {
+		if hd, err = i.wrapValidReferers(hd, refs, sv.ServerNames); err != nil {
+			return nil, fmt.Errorf("location %q: %w", loc.Pattern, err)
+		}
+	}
 	if hd, err = i.applyPolicies(hd, sv, loc); err != nil {
 		return nil, fmt.Errorf("location %q: %w", loc.Pattern, err)
 	}
 	rt.handler = hd
 	return rt, nil
+}
+
+// resolveRate returns the nearest limit_rate / limit_rate_after (bytes/sec).
+func resolveRate(h *config.HTTP, sv *config.Server, loc *config.Location) (rate, after int64) {
+	pick := func(vals ...*int64) int64 {
+		var out int64
+		for _, v := range vals {
+			if v != nil {
+				out = *v
+			}
+		}
+		return out
+	}
+	if loc != nil {
+		return pick(h.LimitRate, sv.LimitRate, loc.LimitRate),
+			pick(h.LimitRateAfter, sv.LimitRateAfter, loc.LimitRateAfter)
+	}
+	return pick(h.LimitRate, sv.LimitRate), pick(h.LimitRateAfter, sv.LimitRateAfter)
+}
+
+// firstReferers returns the location list if set, else the server list
+// (valid_referers does not merge across scopes in nginx).
+func firstReferers(loc, sv []string) []string {
+	if len(loc) > 0 {
+		return loc
+	}
+	return sv
 }
 
 // applyPolicies applies auth_basic and allow/deny, resolving location-over-
@@ -501,6 +545,12 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 			Prefix: prefix, Headers: headers, Cookies: cookies,
 			Redirects: redirects, HideHeaders: loc.HideHeaders, PassHeaders: loc.PassHeaders,
 		}
+		// upstream keepalive → backend idle-connection pool size
+		if u, err := url.Parse(loc.ProxyPass); err == nil && u.Port() == "" {
+			if up := i.cfg.HTTP.Upstreams[u.Hostname()]; up != nil {
+				opts.Keepalive = up.Keepalive
+			}
+		}
 		if t := durOr(loc.ProxyConnectTimeout, sv.ProxyConnectTimeout, i.cfg.HTTP.ProxyConnectTimeout); t > 0 {
 			opts.ConnectTimeout = t
 		}
@@ -519,7 +569,8 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 		idx = index
 	}
 	ai := boolOr(loc.Autoindex, sv.Autoindex, i.cfg.HTTP.Autoindex)
-	st := &handler.Static{Root: r, Alias: loc.Alias, Prefix: loc.Pattern, Index: idx, Autoindex: ai, ErrLog: i.errLog}
+	gzs := boolOr(loc.GzipStatic, sv.GzipStatic, i.cfg.HTTP.GzipStatic)
+	st := &handler.Static{Root: r, Alias: loc.Alias, Prefix: loc.Pattern, Index: idx, Autoindex: ai, GzipStatic: gzs, ErrLog: i.errLog}
 	return st, st, nil
 }
 

@@ -20,12 +20,13 @@ import (
 // root maps the full URI under Root; alias replaces the matched location
 // prefix with Alias.
 type Static struct {
-	Root      string
-	Alias     string
-	Prefix    string // the location pattern this handler is mounted at
-	Index     []string
-	Autoindex bool
-	ErrLog    *logging.ErrorLog
+	Root       string
+	Alias      string
+	Prefix     string // the location pattern this handler is mounted at
+	Index      []string
+	Autoindex  bool
+	GzipStatic bool // serve a precompressed <file>.gz when the client accepts gzip
+	ErrLog     *logging.ErrorLog
 }
 
 func (s *Static) ServeHTTP(w http.ResponseWriter, r *http.Request) {
@@ -129,6 +130,21 @@ func (s *Static) FilePath(uriPath string) string {
 }
 
 func (s *Static) serveFile(w http.ResponseWriter, r *http.Request, fsPath string, fi os.FileInfo) {
+	// gzip_static: prefer <file>.gz if it exists and the client accepts gzip
+	if s.GzipStatic && r.Method != http.MethodHead &&
+		strings.Contains(r.Header.Get("Accept-Encoding"), "gzip") {
+		if gz, err := os.Open(fsPath + ".gz"); err == nil {
+			defer gz.Close()
+			if gzi, err := gz.Stat(); err == nil && !gzi.IsDir() {
+				w.Header().Set("Content-Encoding", "gzip")
+				w.Header().Add("Vary", "Accept-Encoding")
+				// name the served content by the original path so ServeContent
+				// picks the real Content-Type (not application/gzip)
+				http.ServeContent(w, r, fi.Name(), fi.ModTime(), gz)
+				return
+			}
+		}
+	}
 	f, err := os.Open(fsPath)
 	if err != nil {
 		s.fail(w, r, err, fsPath)

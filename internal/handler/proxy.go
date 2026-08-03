@@ -48,6 +48,7 @@ type ProxyOptions struct {
 	PassHeaders    []string          // proxy_pass_header, re-enables defaults
 	ConnectTimeout time.Duration     // 0 → 60s (proxy_connect_timeout default)
 	ReadTimeout    time.Duration     // 0 → 60s (proxy_read_timeout default)
+	Keepalive      int               // idle keep-alive conns to backend; 0 → 16 default
 }
 
 // defaultHiddenHeaders mirrors nginx: internal X-Accel-* plus Date/Server,
@@ -189,6 +190,10 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 		return nil
 	}
 
+	idlePerHost := 16
+	if opts.Keepalive > 0 {
+		idlePerHost = opts.Keepalive
+	}
 	var transport http.RoundTripper = &http.Transport{
 		DialContext: (&net.Dialer{
 			Timeout:   connectTimeout,
@@ -196,7 +201,7 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 		}).DialContext,
 		ResponseHeaderTimeout: readTimeout,
 		MaxIdleConns:          100,
-		MaxIdleConnsPerHost:   16,
+		MaxIdleConnsPerHost:   idlePerHost,
 		IdleConnTimeout:       90 * time.Second,
 	}
 	if pool != nil {

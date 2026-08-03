@@ -1,6 +1,8 @@
 package server
 
 import (
+	"bytes"
+	"compress/gzip"
 	"context"
 	"crypto/tls"
 	"fmt"
@@ -12,6 +14,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestAddHeader(t *testing.T) {
@@ -373,5 +376,172 @@ http {
 	a := inst.Addrs[0]
 	if a.tlsConf.MinVersion != tls.VersionTLS13 || a.tlsConf.MaxVersion != tls.VersionTLS13 {
 		t.Errorf("ssl_protocols TLSv1.3: min=%#x max=%#x", a.tlsConf.MinVersion, a.tlsConf.MaxVersion)
+	}
+}
+
+func TestBatch2GzipStatic(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "app.js"), "console.log('raw')")
+	// 预压缩版本（内容不同以便区分是否命中 .gz）
+	var buf bytes.Buffer
+	zw := gzip.NewWriter(&buf)
+	zw.Write([]byte("console.log('gzipped')"))
+	zw.Close()
+	os.WriteFile(filepath.Join(dir, "app.js.gz"), buf.Bytes(), 0644)
+
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        root "%s";
+        location / { gzip_static on; }
+    }
+}
+`, filepath.ToSlash(dir))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	tr := &http.Transport{DisableCompression: true}
+	req, _ := http.NewRequest("GET", ts.URL+"/app.js", nil)
+	req.Header.Set("Accept-Encoding", "gzip")
+	resp, err := tr.RoundTrip(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	if resp.Header.Get("Content-Encoding") != "gzip" {
+		t.Fatalf("gzip_static should serve .gz, headers: %v", resp.Header)
+	}
+	zr, _ := gzip.NewReader(resp.Body)
+	body, _ := io.ReadAll(zr)
+	if string(body) != "console.log('gzipped')" {
+		t.Errorf("served wrong content: %q", body)
+	}
+	// 不接受 gzip 的客户端应拿到原文件
+	req2, _ := http.NewRequest("GET", ts.URL+"/app.js", nil)
+	resp2, _ := tr.RoundTrip(req2)
+	defer resp2.Body.Close()
+	b2, _ := io.ReadAll(resp2.Body)
+	if resp2.Header.Get("Content-Encoding") == "gzip" || string(b2) != "console.log('raw')" {
+		t.Errorf("no-gzip client should get raw file: %q enc=%q", b2, resp2.Header.Get("Content-Encoding"))
+	}
+}
+
+func TestBatch2ValidReferers(t *testing.T) {
+	conf := `
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        server_name example.com;
+        location /img/ {
+            valid_referers none server_names *.trusted.com;
+            return 200 "image";
+        }
+    }
+}
+`
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	do := func(referer string) int {
+		req, _ := http.NewRequest("GET", ts.URL+"/img/x.png", nil)
+		if referer != "" {
+			req.Header.Set("Referer", referer)
+		}
+		resp, err := ts.Client().Do(req)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		return resp.StatusCode
+	}
+	if do("") != 200 {
+		t.Error("none: empty referer should pass")
+	}
+	if do("http://example.com/page") != 200 {
+		t.Error("server_names: own domain should pass")
+	}
+	if do("http://a.trusted.com/x") != 200 {
+		t.Error("*.trusted.com should pass")
+	}
+	if do("http://evil.com/steal") != 403 {
+		t.Error("untrusted referer should be 403")
+	}
+}
+
+func TestBatch2LimitRate(t *testing.T) {
+	// 200 字节 @ 1000 B/s，limit_rate_after 0 → 约 0.2s；给足余量只验证"确有延迟"
+	body := strings.Repeat("x", 2000)
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        location / {
+            limit_rate 5k;
+            return 200 "%s";
+        }
+    }
+}
+`, body)
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+	start := time.Now()
+	resp, err := ts.Client().Get(ts.URL + "/")
+	if err != nil {
+		t.Fatal(err)
+	}
+	got, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	elapsed := time.Since(start)
+	if len(got) != 2000 {
+		t.Fatalf("body length %d, want 2000", len(got))
+	}
+	// 2000B @ 5KB/s ≈ 0.39s；至少应明显 > 0（宽松下限，避免 CI 抖动误判）
+	if elapsed < 200*time.Millisecond {
+		t.Errorf("limit_rate did not throttle: %v for 2000B @ 5KB/s", elapsed)
+	}
+}
+
+func TestBatch2UpstreamKeepalive(t *testing.T) {
+	// 仅验证配置解析 + 传递到 proxy（不便直接观测连接池）
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		io.WriteString(w, "ok")
+	}))
+	defer backend.Close()
+	bu, _ := url.Parse(backend.URL)
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    upstream pool {
+        server %s;
+        keepalive 32;
+    }
+    server {
+        listen 8080;
+        location / { proxy_pass http://pool; }
+    }
+}
+`, bu.Host)
+	inst := buildInstance(t, conf)
+	if inst.cfg.HTTP.Upstreams["pool"].Keepalive != 32 {
+		t.Errorf("keepalive not parsed: %d", inst.cfg.HTTP.Upstreams["pool"].Keepalive)
+	}
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+	// 多次请求确保代理正常（连接复用是内部行为）
+	for i := 0; i < 3; i++ {
+		if _, body := get(t, ts, "/", ""); body != "ok" {
+			t.Fatalf("proxy with keepalive failed: %q", body)
+		}
 	}
 }

@@ -2,6 +2,15 @@
 
 本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
 
+## v0.4.2
+
+对齐 nginx 的功能补齐（第二批）：
+
+- `limit_rate` / `limit_rate_after` —— 响应带宽限速；前 N 字节全速、之后按速率节流。
+- `valid_referers` —— 防盗链：非法 `Referer` 返回 403；规则支持 `none` / `blocked` / `server_names` / 域名（`*.foo.com`）/ `~正则`。
+- upstream `keepalive` —— 到后端的空闲长连接池（连接复用，降低高并发下的握手开销）。
+- `gzip_static` —— 存在 `<文件>.gz` 且客户端支持 gzip 时，直接发送预压缩文件，省去实时压缩。
+
 ## v0.4.1
 
 对齐 nginx 的功能补齐（第一批）：
