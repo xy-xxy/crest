@@ -148,21 +148,41 @@ type yamlListen struct {
 
 func (l *yamlListen) UnmarshalYAML(node *yaml.Node) error {
 	if node.Kind == yaml.ScalarNode {
-		l.Address = node.Value
+		// scalar form: a bare port/address, or nginx-style "443 ssl default"
+		fields := strings.Fields(node.Value)
+		if len(fields) == 0 {
+			return fmt.Errorf("listen entry is empty")
+		}
+		l.Address = fields[0]
+		for _, f := range fields[1:] {
+			switch f {
+			case "ssl":
+				l.SSL = true
+			case "default", "default_server":
+				l.Default = true
+			default:
+				return fmt.Errorf("listen %q: unknown flag %q (only ssl / default)", node.Value, f)
+			}
+		}
 		return nil
 	}
 	var m struct {
-		Address string `yaml:"address"`
+		Port    string `yaml:"port"`
+		Address string `yaml:"address"` // 兼容旧写法
 		SSL     bool   `yaml:"ssl"`
 		Default bool   `yaml:"default"`
 	}
 	if err := node.Decode(&m); err != nil {
 		return err
 	}
-	if m.Address == "" {
-		return fmt.Errorf("listen entry needs an address")
+	addr := m.Port
+	if addr == "" {
+		addr = m.Address
 	}
-	l.Address, l.SSL, l.Default = m.Address, m.SSL, m.Default
+	if addr == "" {
+		return fmt.Errorf(`listen entry needs a port, e.g. {port: 443, ssl: true} or "443 ssl"`)
+	}
+	l.Address, l.SSL, l.Default = addr, m.SSL, m.Default
 	return nil
 }
 

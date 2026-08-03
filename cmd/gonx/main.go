@@ -22,7 +22,7 @@ import (
 	"gonx/internal/server"
 )
 
-const version = "0.3.0"
+const version = "0.4.0"
 
 func main() {
 	confPath := flag.String("c", "gonx.conf", "path to configuration file")

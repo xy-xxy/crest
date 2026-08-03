@@ -1,0 +1,60 @@
+# 更新日志
+
+本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
+
+## v0.4.0
+
+首个正式发布版本。gonx 是一个用 Go 编写的 nginx 替代品：单文件、无外部依赖，
+配置文件直接兼容 nginx.conf，同时提供更清爽的原生 YAML 格式和内置的浏览器管理控制台。
+
+### 亮点
+
+- **原生 YAML 配置** —— 除 nginx.conf 语法外新增 YAML 格式，按扩展名 / 内容自动识别；
+  未知字段在校验时直接报错，避免拼写错误被静默忽略。
+- **浏览器管理控制台** —— `gonx -s ui` 或配置 `ui` 段一键打开：
+  - 请求统计（总数 / 2xx / 3xx / 4xx / 5xx，支持按监听端口筛选）
+  - 一键重载配置 / 重开日志 / 优雅停止
+  - 日志查看（success / error / console，带行号、自动刷新、粘底滚动）
+  - 在线配置编辑器（VS Code 风格语法高亮 + 行号，保存前经真实解析器校验并自动备份）
+  - 右侧配置帮助抽屉：完整配置示例（含全部指令，带注释）+ 分组速查 + 关键字搜索
+- **三路运行时日志分流** —— 未显式配置 access_log 时，自动按可执行文件同级 `log/` 目录分流：
+  成功请求 → `success.log`，失败请求（≥400）→ `error.log`，进程消息 → `console.log`。
+- **跨平台一键构建** —— `build.sh` 同时产出 Windows(带图标) + Linux amd64/arm64 静态二进制。
+
+### 配置增强
+
+- `listen` 支持三种写法：端口、nginx 风格字符串简写（`"443 ssl default"`）、
+  映射（`{port: 443, ssl: true}`，旧的 `{address: ...}` 仍兼容）。
+- 配置内的相对路径（root/alias/证书/htpasswd/日志/缓存目录）按**配置文件所在目录**解析，
+  不再受启动工作目录影响；加载时对不存在的 root/证书等目录发出警告，`-t` 即可发现。
+- 运维命令新增 `gonx -s ui`（打开控制台）、`gonx -s reopen`（配合日志轮转）。
+
+### 修复
+
+- **默认 IPv4-only 监听**（对齐 nginx）：修复 dual-stack 下 `localhost` 客户端以 `::1`
+  到达、并被原样通过 `X-Real-IP` 转发给后端、导致仅识别 IPv4 的后端崩溃的问题。
+  显式 IPv6 字面量（`[::]:port`）仍监听 IPv6。
+- 配置高亮 / 页面布局若干细节修复。
+
+### 完整功能
+
+HTTP 服务、反向代理、负载均衡（加权轮询 / least_conn / ip_hash，含 max_fails / fail_timeout /
+backup / down 健康检查）、限流（limit_req / limit_conn）、代理缓存（proxy_cache）、
+TLS + SNI + 自动 HTTP/2、L4 代理（stream，TCP / UDP）、rewrite、try_files（含命名 location
+`@name`）、gzip、error_page、add_header、allow/deny、auth_basic（bcrypt/apr1/SHA1/明文）、
+autoindex、map、proxy_set_header / proxy_cookie_path、变量系统（`$uri` `$host` `$upstream_addr`
+`$proxy_add_x_forwarded_for` 等）、热重载（`-s reload`，坏配置不影响运行中的服务）。
+
+### 已知限制
+
+- 无自动 HTTPS（ACME/Let's Encrypt），需手动提供证书。
+- 无服务发现（Docker/Kubernetes）。
+- reload 端口交接存在毫秒级窗口，非零停机。
+- proxy_cache 重启后冷启动、不处理 Vary；单缓存对象上限 8MB。
+- Windows 上日志轮转受文件锁限制（Linux 无此问题）。
+
+### 环境
+
+- 构建需 Go 1.20+；运行为单文件静态二进制，无运行时依赖。
+- 依赖：`golang.org/x/crypto`（bcrypt）、`gopkg.in/yaml.v3`，均为纯 Go。
+- 测试：11 个包，63 个测试函数，全部通过。

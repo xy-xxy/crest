@@ -1,6 +1,7 @@
 package config
 
 import (
+	"strings"
 	"testing"
 	"time"
 )
@@ -164,5 +165,74 @@ http:
 	acc := cfg.HTTP.Servers[0].Locations[0].Access
 	if len(acc) != 3 || !acc[0].Allow || acc[0].Cidr != "127.0.0.1" || acc[2].Allow || acc[2].Cidr != "all" {
 		t.Errorf("access rules order wrong: %+v", acc)
+	}
+}
+
+func TestYAMLListenForms(t *testing.T) {
+	src := `
+http:
+  servers:
+    - listen: [80, "443 ssl", "8080 ssl default", {port: 9000, ssl: true}]
+      locations:
+        - path: /
+          return: {code: 200, body: ok}
+`
+	cfg, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	ls := cfg.HTTP.Servers[0].Listens
+	if len(ls) != 4 {
+		t.Fatalf("want 4 listens, got %d", len(ls))
+	}
+	if ls[0].Addr != ":80" || ls[0].SSL {
+		t.Errorf("listen[0] wrong: %+v", ls[0])
+	}
+	if ls[1].Addr != ":443" || !ls[1].SSL {
+		t.Errorf("listen[1] '443 ssl' wrong: %+v", ls[1])
+	}
+	if ls[2].Addr != ":8080" || !ls[2].SSL || !ls[2].Default {
+		t.Errorf("listen[2] '8080 ssl default' wrong: %+v", ls[2])
+	}
+	if ls[3].Addr != ":9000" || !ls[3].SSL {
+		t.Errorf("listen[3] mapping wrong: %+v", ls[3])
+	}
+}
+
+func TestYAMLListenMissingAddress(t *testing.T) {
+	src := `
+http:
+  servers:
+    - listen: [{ssl: true}]
+      locations:
+        - path: /
+          return: {code: 200, body: ok}
+`
+	_, err := LoadYAML([]byte(src))
+	if err == nil {
+		t.Fatal("mapping listen without port should error")
+	}
+	if !strings.Contains(err.Error(), "needs a port") {
+		t.Errorf("error should guide the fix, got: %v", err)
+	}
+}
+
+func TestYAMLListenAddressStillWorks(t *testing.T) {
+	// 旧写法 {address: ...} 仍兼容
+	src := `
+http:
+  servers:
+    - listen: [{address: 8443, ssl: true}]
+      locations:
+        - path: /
+          return: {code: 200, body: ok}
+`
+	cfg, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	l := cfg.HTTP.Servers[0].Listens[0]
+	if l.Addr != ":8443" || !l.SSL {
+		t.Errorf("legacy address form broken: %+v", l)
 	}
 }

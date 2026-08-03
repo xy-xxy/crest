@@ -1,7 +1,7 @@
 # gonx 原生 YAML 配置 —— 等价于 nginx.conf
 # 用法: gonx.exe -c gonx.yml   (按扩展名自动识别为 YAML)
 ui:
-  listen: 127.0.0.1:8899                                                                # 固定管理端口（默认随机）
+  listen: 0.0.0.0:8899                                                                # 固定管理端口（默认随机）
   token: ZVLbwzesmN2dzcHvR3fGgxo6felio2sGmX3mZPIzSluoCottcLv4uMQOz6xEQA9LQZHmCucS       # 固定访问令牌（默认每次启动随机生成）
   open: true                                                                            # 启动时自动打开浏览器
 
@@ -17,7 +17,7 @@ http:
 
   servers:
     # 前端 + 三个反向代理
-    - listen: [9999]
+    - listen: [9999, "9443 ssl"]
       server_name: [myApp]
       index: [index.html, index.htm]
 

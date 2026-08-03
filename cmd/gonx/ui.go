@@ -389,31 +389,135 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <input id="help-q" placeholder="搜索配置项，如 proxy_pass、limit、ssl…" oninput="filterHelp()">
       <div class="note">单位：大小 <b>1k / 200m / 1g</b>；时间 <b>30s / 10m / 2h / 1d</b>；速率 <b>5r/s / 60r/m</b>。未知字段会在保存校验时直接报错。</div>
 
-      <details open><summary>配置示例（80 端口 + 管理页面）</summary>
-<pre># 最小可用示例：静态站 + SPA 回落 + 反向代理
+      <details open><summary>完整配置示例（含全部配置项，带注释）</summary>
+<pre># ===== 管理页面（可选）=====
 ui:
-  listen: 127.0.0.1:8899        # 管理页面固定地址
-  token: my-secret              # 访问令牌（不写则每次随机）
-  open: true                    # 启动时自动打开浏览器
+  listen: 127.0.0.1:8899        # 管理页面地址，建议保持 127.0.0.1 仅本机可访问
+  token: change-me-please       # 访问令牌（不写则每次启动随机生成）
+  open: true                    # 启动时自动打开浏览器（无桌面环境的服务器会静默跳过）
 
-error_log: {path: stderr, level: info}
+# ===== 进程错误日志 =====
+error_log:
+  path: logs/error.log          # 路径；也可写 stderr / stdout
+  level: info                   # 级别：debug / info / warn / error
 
+# ===== HTTP 服务 =====
 http:
-  servers:
-    - listen: [80]
-      server_name: [example.com]
-      locations:
-        - path: /                          # 静态站 + SPA 回落
-          root: D:/www/dist
-          try_files: [$uri, $uri/, /index.html]
+  # 访问日志：不写此项时自动分流到 log/success.log 与 log/error.log
+  access_log: {path: logs/access.log, format: main}
+  log_formats:                  # 自定义日志格式（内置 combined 可直接用）
+    main: '$remote_addr - [$time_local] "$request" $status $body_bytes_sent $request_time $upstream_addr'
 
-        - path: /api/                      # 反向代理到后端
-          proxy_pass: http://127.0.0.1:8080/
-          proxy_set_header:
+  gzip:                         # 响应压缩
+    enabled: true
+    min_length: 1k              # 小于此大小不压缩
+    level: 6                    # 压缩级别 1-9
+    types: [text/css, application/javascript, application/json]
+
+  limit_req_zones:              # 限速区（漏桶）
+    perip: {key: $binary_remote_addr, rate: 10r/s}   # 速率 Nr/s 或 Nr/m
+  limit_conn_zones:             # 并发连接数区
+    addr: $binary_remote_addr   # 名称 → 统计维度变量
+  cache_paths:                  # 代理缓存区
+    apicache: cache/api         # 名称 → 磁盘目录（自动创建）
+
+  maps:                         # 变量映射：按 source 的值决定 target
+    - source: $http_upgrade
+      target: $conn_upgrade
+      cases:                    # 支持精确 / ~正则 / ~*忽略大小写 / default
+        default: ""
+        websocket: upgrade
+
+  # 以下为全局默认，server / location 可就近覆盖
+  client_max_body_size: 50m     # 请求体上限，超出返回 413
+  proxy_connect_timeout: 60s    # 连接后端超时
+  proxy_read_timeout: 300s      # 读后端响应超时
+  autoindex: false              # 目录列表默认关闭
+
+  upstreams:                    # 负载均衡后端组
+    backend:
+      balancer: least_conn      # round_robin(默认) / least_conn / ip_hash
+      servers:
+        - {address: 127.0.0.1:8001, weight: 3, max_fails: 2, fail_timeout: 30s}
+        - {address: 127.0.0.1:8002}          # 权重默认 1
+        - {address: 127.0.0.1:8003, backup: true}   # 备用：主全挂时才启用
+        - {address: 127.0.0.1:8004, down: true}      # 手动摘除
+
+  servers:
+    # ---- 站点 1：静态站 + SPA + 反代 + HTTPS ----
+    - listen: [80, {port: 443, ssl: true, default: true}]  # 同时听 80 和 443(带SNI证书)
+      server_name: [example.com, "*.example.com"]  # 精确 / *.前缀 / 后缀.* / ~正则
+      root: /var/www/dist                          # 静态根目录
+      index: [index.html, index.htm]               # 默认首页
+      ssl_certificate: certs/example.crt           # PEM 证书（TLS 下自动启用 HTTP/2）
+      ssl_certificate_key: certs/example.key       # PEM 私钥
+      error_pages:                                 # 自定义错误页（仅拦截 gonx 自身错误）
+        - {codes: [500, 502, 503, 504], uri: /50x.html}
+      add_headers:                                 # 附加响应头
+        - {name: X-Frame-Options, value: SAMEORIGIN, always: true}  # always: 错误响应也加
+      access:                                      # IP 访问控制，按顺序首个命中生效
+        - {allow: 192.168.0.0/16}
+        - {allow: 127.0.0.1}
+        - {deny: all}
+      rewrites:                                    # server 级重写，在 location 匹配前执行
+        - {pattern: "^/old/(.*)$", replacement: /new/$1, flag: permanent}  # last/break/redirect/permanent
+
+      locations:
+        - path: /                                  # 前缀匹配（默认）
+          try_files: [$uri, $uri/, /index.html]    # 依次探测，末项兜底（SPA 常用）
+
+        - path: /api/
+          proxy_pass: http://backend               # 反代到 upstream；尾部 / 会替换匹配前缀
+          proxy_set_header:                        # 传给后端的请求头
             Host: $host
             X-Real-IP: $remote_addr
-            X-Forwarded-For: $proxy_add_x_forwarded_for</pre>
-      <div class="note">保存为 gonx.yml 后运行 gonx.exe -c gonx.yml 即可。注意 Windows/Linux 上监听 80 端口可能需要管理员/root 权限。</div>
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+            X-Forwarded-Proto: $scheme
+          proxy_cookie_path:                       # 改写后端 Set-Cookie 的 Path
+            - {from: /api/, to: /}
+          proxy_cache: apicache                    # 启用缓存区
+          proxy_cache_valid:                       # 缓存有效期
+            - {codes: [200, 301], time: 10m}
+            - {any: true, time: 1m}                # any: 其余状态码
+          limit_req: {zone: perip, burst: 20, nodelay: true}  # 限速
+          limit_conn: {zone: addr, max: 10}        # 并发上限
+          client_max_body_size: 200m               # 覆盖全局
+
+        - path: /ws/
+          proxy_pass: http://127.0.0.1:9001        # WebSocket 的 Upgrade 头自动处理
+
+        - path: /assets/
+          alias: /var/www/static/                  # 替换前缀映射（区别于 root 拼接全路径）
+          autoindex: true                          # 开启目录列表
+
+        - path: /admin/
+          auth_basic: {realm: "Admin Area", user_file: certs/htpasswd}  # 基础认证
+
+        - path: /ping
+          match: exact                             # 精确匹配（对应 nginx =）
+          return: {code: 200, body: "pong $scheme"}  # 直接响应，支持变量
+
+        - path: "@fallback"                        # 命名 location，仅由 try_files 跳转进入
+          proxy_pass: http://backend
+
+    # ---- 站点 2：正则匹配示例 ----
+    - listen: [8080]
+      server_name: ['~^api\d+\.example\.com$']     # 正则虚拟主机名
+      locations:
+        - path: '\.(jpg|png|gif)$'                 # 正则路径
+          match: regex_i                           # 忽略大小写(对应 nginx ~*)；regex 对应 ~
+          root: /var/www/images
+
+# ===== L4 代理（TCP / UDP）=====
+stream:
+  upstreams:                    # stream 也支持负载均衡
+    tcp_pool:
+      servers:
+        - {address: 127.0.0.1:5432}
+  servers:
+    - {listen: 15432, proxy_pass: tcp_pool, proxy_timeout: 1h}          # TCP 转发
+    - {listen: 19100, udp: true, proxy_pass: 192.168.1.100:19100, proxy_responses: 1, proxy_timeout: 10s}  # UDP 转发</pre>
+      <div class="note">这是覆盖全部指令的参考配置，直接复制后按实际情况修改路径/域名/后端地址即可；不需要的段落删掉。保存为 gonx.yml 后运行 gonx -c gonx.yml；先用 gonx -t -c gonx.yml 校验（占位路径会提示不存在，属正常）。</div>
       </details>
 
       <details><summary>顶层结构</summary>
@@ -436,7 +540,7 @@ http:
 
       <details><summary>servers（虚拟主机列表）</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
-      <tr><td>listen</td><td>监听端口；标量或带 ssl/default 的映射</td><td>[8080, {address: 443, ssl: true, default: true}]</td></tr>
+      <tr><td>listen</td><td>监听端口列表；每项可为端口、"端口 ssl default" 简写，或 {port, ssl, default} 映射。ssl 是每项独立属性，同一端口不能既明文又 ssl</td><td>[80, {port: 443, ssl: true}]</td></tr>
       <tr><td>server_name</td><td>按 Host 匹配：精确 / *.foo / foo.* / ~正则</td><td>[example.com, "*.example.org"]</td></tr>
       <tr><td>root / index</td><td>静态根目录与默认页</td><td>root: dist</td></tr>
       <tr><td>ssl_certificate(_key)</td><td>PEM 证书 + 私钥；多 server 自动按 SNI 选择；TLS 下自动启用 HTTP/2</td><td>ssl_certificate: cert.pem</td></tr>
