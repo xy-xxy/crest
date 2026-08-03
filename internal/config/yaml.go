@@ -316,7 +316,7 @@ func (y *yamlRoot) toConfig() (*Config, error) {
 		cfg.Stream = st
 	}
 	if y.UI != nil {
-		cfg.UI = &UIConfig{Listen: y.UI.Listen, Token: y.UI.Token, Open: y.UI.Open}
+		cfg.UI = &UIConfig{Listen: y.UI.Listen, Token: y.UI.Token, Open: y.UI.Open, Allow: y.UI.Allow}
 	}
 	if cfg.HTTP == nil && cfg.Stream == nil {
 		return nil, fmt.Errorf("configuration has neither an http nor a stream section")

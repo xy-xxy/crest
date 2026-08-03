@@ -21,6 +21,8 @@ import (
 
 func main() {
 	out := flag.String("o", "gonx.ico", "输出 .ico 路径")
+	pngOut := flag.String("png", "", "额外输出一个 PNG（用于 README，如 gonx.png）")
+	pngSize := flag.Int("png-size", 256, "PNG 边长")
 	flag.Parse()
 
 	sizes := []int{16, 32, 48, 64, 128, 256}
@@ -36,6 +38,17 @@ func main() {
 	ico := buildICO(sizes, pngs)
 	if err := os.WriteFile(*out, ico, 0644); err != nil {
 		panic(err)
+	}
+
+	if *pngOut != "" {
+		f, err := os.Create(*pngOut)
+		if err != nil {
+			panic(err)
+		}
+		if err := png.Encode(f, renderLogo(*pngSize)); err != nil {
+			panic(err)
+		}
+		f.Close()
 	}
 }
 

@@ -10,9 +10,11 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"net/netip"
 	"os"
 	"os/signal"
 	"path/filepath"
+	"reflect"
 	"strings"
 	"sync"
 	"syscall"
@@ -77,7 +79,7 @@ func main() {
 		fmt.Fprintf(console, "gonx: [emerg] %v\n", err)
 		os.Exit(1)
 	}
-	ru := &runner{confPath: *confPath, inst: inst, opts: opts, console: console, errs: make(chan error, 8), quit: make(chan struct{})}
+	ru := &runner{confPath: *confPath, inst: inst, opts: opts, console: console, ui: cfg.UI, errs: make(chan error, 8), quit: make(chan struct{})}
 	ru.watch(inst.Start())
 
 	stopCtl, err := startControl(ru, *confPath, cfg.UI)
@@ -135,6 +137,7 @@ type runner struct {
 	inst     *server.Instance
 	opts     server.Options
 	console  io.Writer
+	ui       *config.UIConfig // ui at startup; the control channel is fixed then
 	errs     chan error
 	quit     chan struct{}
 	stopOnce sync.Once
@@ -151,17 +154,25 @@ func (ru *runner) watch(c <-chan error) {
 // reload builds a full new instance first, so a broken config never takes
 // down the running one. The port handoff is not zero-downtime: old listeners
 // must close before the new ones can bind.
-func (ru *runner) reload() error {
+// reload returns a human-facing note (shown to the -s reload client) plus any
+// fatal error. The note carries warnings the client should see, notably that
+// ui-section changes need a full restart.
+func (ru *runner) reload() (note string, err error) {
 	cfg, err := loadConfig(ru.confPath)
 	if err != nil {
-		return err
+		return "", err
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(ru.console, "gonx: [warn] %s\n", w)
 	}
+	// 控制通道（含 ui.allow / listen / token）在进程启动时固定，reload 不重建
+	if !reflect.DeepEqual(ru.ui, cfg.UI) {
+		note = "注意：ui 段已变更，但控制通道在进程启动时固定，需完全重启（-s stop 后重新启动）才生效"
+		fmt.Fprintln(ru.console, "gonx: [warn] "+note)
+	}
 	ni, err := server.NewWithOptions(cfg, ru.opts)
 	if err != nil {
-		return err
+		return "", err
 	}
 	ru.mu.Lock()
 	defer ru.mu.Unlock()
@@ -171,7 +182,7 @@ func (ru *runner) reload() error {
 	ru.inst = ni
 	ru.watch(ni.Start())
 	fmt.Fprintln(ru.console, "gonx: configuration reloaded")
-	return nil
+	return note, nil
 }
 
 func (ru *runner) shutdown(ctx context.Context) error {
@@ -190,10 +201,21 @@ func (ru *runner) requestStop() {
 // A "ui" config section pins the address/token and can auto-open the browser.
 func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup func(), err error) {
 	listen := "127.0.0.1:0"
+	var allow []netip.Prefix
+	if ui != nil {
+		var perr error
+		if allow, perr = compileAllowList(ui.Allow); perr != nil {
+			return nil, fmt.Errorf("ui.allow: %w", perr)
+		}
+	}
 	if ui != nil && ui.Listen != "" {
 		listen = ui.Listen
 		if host, _, err := net.SplitHostPort(listen); err != nil || host == "" || host == "0.0.0.0" || host == "::" {
-			fmt.Fprintf(ru.console, "gonx: [warn] ui.listen %q is not loopback-only; the console will be reachable from the network\n", listen)
+			if len(allow) == 0 {
+				fmt.Fprintf(ru.console, "gonx: [warn] ui.listen %q is not loopback-only and no ui.allow list is set; the console is reachable from the whole network (token is the only guard)\n", listen)
+			} else {
+				fmt.Fprintf(ru.console, "gonx: [info] ui.listen %q restricted to allow list %v\n", listen, ui.Allow)
+			}
 		}
 	}
 	ln, err := net.Listen("tcp", listen)
@@ -232,11 +254,16 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 	mux := http.NewServeMux()
 	registerUI(mux, ru, token, auth)
 	mux.HandleFunc("/reload", auth(func(w http.ResponseWriter, r *http.Request) {
-		if err := ru.reload(); err != nil {
+		note, err := ru.reload()
+		if err != nil {
 			http.Error(w, err.Error(), http.StatusBadRequest)
 			return
 		}
-		io.WriteString(w, "reloaded\n")
+		if note != "" {
+			io.WriteString(w, "reloaded\n"+note+"\n")
+		} else {
+			io.WriteString(w, "reloaded\n")
+		}
 	}))
 	mux.HandleFunc("/reopen", auth(func(w http.ResponseWriter, r *http.Request) {
 		ru.mu.Lock()
@@ -262,7 +289,7 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		fmt.Fprintf(w, "gonx/%s pid=%d listening=%s\n", version, os.Getpid(), strings.Join(addrs, ","))
 	}))
 
-	srv := &http.Server{Handler: mux}
+	srv := &http.Server{Handler: withIPAllowlist(mux, allow)}
 	go srv.Serve(ln)
 	url := "http://" + reachable + "/ui?token=" + token
 	fmt.Fprintf(ru.console, "gonx: 管理页面 %s\n", url)
@@ -273,6 +300,52 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		srv.Close()
 		os.Remove(ctlPath)
 	}, nil
+}
+
+// compileAllowList parses ui.allow entries (IP or CIDR) into prefixes.
+func compileAllowList(entries []string) ([]netip.Prefix, error) {
+	var out []netip.Prefix
+	for _, e := range entries {
+		if strings.Contains(e, "/") {
+			p, err := netip.ParsePrefix(e)
+			if err != nil {
+				return nil, fmt.Errorf("invalid CIDR %q: %w", e, err)
+			}
+			out = append(out, p.Masked())
+			continue
+		}
+		a, err := netip.ParseAddr(e)
+		if err != nil {
+			return nil, fmt.Errorf("invalid address %q: %w", e, err)
+		}
+		out = append(out, netip.PrefixFrom(a, a.BitLen()))
+	}
+	return out, nil
+}
+
+// withIPAllowlist gates the control channel by client IP. An empty list
+// leaves access unrestricted (token remains the guard).
+func withIPAllowlist(h http.Handler, allow []netip.Prefix) http.Handler {
+	if len(allow) == 0 {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		host, _, err := net.SplitHostPort(r.RemoteAddr)
+		if err != nil {
+			host = r.RemoteAddr
+		}
+		ip, err := netip.ParseAddr(host)
+		if err == nil {
+			ip = ip.Unmap()
+			for _, p := range allow {
+				if p.Addr().Is4() == ip.Is4() && p.Contains(ip) {
+					h.ServeHTTP(w, r)
+					return
+				}
+			}
+		}
+		http.Error(w, "forbidden: your IP is not in the ui allow list", http.StatusForbidden)
+	})
 }
 
 // browsableAddr turns a listen address into one a client can actually

@@ -326,6 +326,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px
 .help .note { font-size: 12px; color: var(--ink-2); margin: 4px 0 8px; }
 .msg { font-size: 13px; margin-left: 8px; }
 .msg.ok { color: var(--accent); } .msg.err { color: var(--danger); white-space: pre-wrap; }
+.msg.warn { color: var(--warn); }
 label.auto { font-size: 13px; color: var(--ink-2); margin-left: auto; user-select: none; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
@@ -392,9 +393,10 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <details open><summary>完整配置示例（含全部配置项，带注释）</summary>
 <pre># ===== 管理页面（可选）=====
 ui:
-  listen: 127.0.0.1:8899        # 管理页面地址，建议保持 127.0.0.1 仅本机可访问
+  listen: 127.0.0.1:8899        # 管理页面地址；回环或具体本机 IP 已限制访问面
   token: change-me-please       # 访问令牌（不写则每次启动随机生成）
   open: true                    # 启动时自动打开浏览器（无桌面环境的服务器会静默跳过）
+  allow: [127.0.0.1, 192.168.0.0/16]   # IP 白名单（IP/CIDR）；仅当 listen 绑 0.0.0.0 时才需要
 
 # ===== 进程错误日志 =====
 error_log:
@@ -522,7 +524,7 @@ stream:
 
       <details><summary>顶层结构</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
-      <tr><td>ui</td><td>管理页面：固定端口/令牌/自动打开（改后需重启）</td><td>listen: 127.0.0.1:8899</td></tr>
+      <tr><td>ui</td><td>管理页面：listen 地址、token 令牌、open 自动开浏览器、allow IP 白名单（仅绑 0.0.0.0 时才需要；回环或具体 IP 已限制访问面）。改后需重启</td><td>listen: 127.0.0.1:8899</td></tr>
       <tr><td>error_log</td><td>进程错误日志路径与级别（debug/info/warn/error）</td><td>{path: stderr, level: info}</td></tr>
       <tr><td>http</td><td>HTTP 服务：servers/upstreams/全局指令</td><td></td></tr>
       <tr><td>stream</td><td>L4 代理（TCP/UDP）</td><td></td></tr></table></details>
@@ -741,8 +743,15 @@ async function act(path, btn) {
   btn.disabled = true; m.textContent = '…'; m.className = 'msg';
   try {
     const r = await fetch(path, {method: 'POST'});
-    const t = await r.text();
-    m.textContent = t.trim(); m.className = 'msg ' + (r.ok ? 'ok' : 'err');
+    const t = (await r.text()).trim();
+    const lines = t.split('\n').filter(Boolean);
+    if (r.ok && lines.length > 1) {
+      // 首行是结果，其余是警告（如 ui 段变更需重启）→ 醒目提示
+      m.textContent = lines[0] + '｜' + lines.slice(1).join(' ');
+      m.className = 'msg warn';
+    } else {
+      m.textContent = t; m.className = 'msg ' + (r.ok ? 'ok' : 'err');
+    }
   } catch (e) { m.textContent = '请求失败'; m.className = 'msg err'; }
   btn.disabled = false;
   refreshStatus();

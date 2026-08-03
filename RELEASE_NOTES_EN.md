@@ -1,8 +1,39 @@
-# gonx v0.4.0
+# gonx
 
 A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
+
+## v0.4.1
+
+**nginx parity (batch 1):**
+
+- `expires` — response caching headers (duration / `off` / `epoch` / `max` /
+  negative no-cache), inherited http < server < location.
+- `proxy_redirect` — rewrite the `Location` header from an upstream 3xx; `off`
+  disables it, the default maps the `proxy_pass` URL back to the location prefix.
+- `proxy_hide_header` / `proxy_pass_header` — control which upstream response
+  headers pass through; `Date` / `Server` / `X-Accel-*` are hidden by default.
+- `server_tokens` — whether the `Server` response header carries the version.
+- `ssl_protocols` — configurable allowed TLS versions (http/server scope),
+  default minimum TLS 1.2.
+
+**Security:**
+
+- **TLS 1.2 minimum by default** — TLS 1.0/1.1 are deprecated (RFC 8996) and now
+  rejected; override with `ssl_protocols`.
+
+**Admin console:**
+
+- `ui.allow` — IP allow list (IP / CIDR). When bound to `0.0.0.0` only listed
+  clients are admitted; loopback or a specific host IP already limits reach, so
+  no list is needed.
+- `-s reload` warns — on both the command line and the console — that `ui`
+  changes need a full restart (the control channel is fixed at process start).
+- Fix: the auto-opened admin URL uses `127.0.0.1` under a wildcard listen
+  (`0.0.0.0` / `::`) so the browser can reach it.
+
+## v0.4.0
 
 ## Highlights
 

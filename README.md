@@ -1,31 +1,66 @@
-# gonx
+<table border="0" cellspacing="0" cellpadding="0"><tr>
+<td width="220" align="center" valign="middle"><img src="gonx.png" width="190" alt="gonx"></td>
+<td valign="middle"><h1>gonx</h1><b>nginx-compatible web server &amp; reverse proxy, written in Go</b></td>
+</tr></table>
 
-> 发布说明 / Release Notes：[中文](RELEASE_NOTES_CN.md) · [English](RELEASE_NOTES_EN.md) — 当前版本 v0.4.1
+![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
+![Version](https://img.shields.io/badge/version-v0.4.1-009639)
+![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
+![Tests](https://img.shields.io/badge/tests-7%20packages%20passing-brightgreen)
+![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-009639)
 
-用 Go 写的类 nginx Web 服务器 / 反向代理。支持两种配置格式，按文件扩展名自动识别：
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.4.1**
 
-- **`.yml` / `.yaml`** —— gonx 原生 YAML 格式（推荐自用，见 `gonx.yml`）
-- **其他（`.conf` 等）** —— nginx.conf 兼容语法（方便直接迁移已有配置）
+gonx is a single-binary, zero-dependency web server and reverse proxy. It runs
+your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
+built-in browser admin console — aimed at small / internal / self-hosted
+deployments.
 
-两种格式解析后产出完全相同的内部结构，功能等价，随意选用。
+Two config formats, auto-detected by file extension:
 
-## 快速开始
+- **`.yml` / `.yaml`** — gonx's native YAML format (recommended, see `gonx.yml`)
+- **anything else (`.conf`, …)** — nginx.conf-compatible syntax (drop in your existing config)
+
+Both parse to the exact same internal structure, so they are functionally equivalent.
+
+> [!IMPORTANT]
+> gonx targets deployments where nginx.conf compatibility and a friendly admin UI
+> matter more than web-scale hardening. It is a single-author project with **no
+> automatic HTTPS (ACME) and no service discovery** yet — for those, use nginx,
+> Caddy or Traefik. See [Limitations and roadmap](#limitations-and-roadmap).
+
+## Table of contents
+
+- [Quick start](#quick-start)
+- [YAML config at a glance](#yaml-config-at-a-glance)
+- [Supported directives](#supported-directives)
+- [Runtime logs](#runtime-logs)
+- [Ops commands](#ops-commands)
+- [Admin console](#admin-console)
+- [Linux deployment](#linux-deployment)
+- [nginx-aligned semantics](#nginx-aligned-semantics)
+- [Limitations and roadmap](#limitations-and-roadmap)
+- [Build](#build)
+- [Layout](#layout)
+- [Tests](#tests)
+
+## Quick start
 
 ```sh
-# YAML 格式启动
+# start with a YAML config
 go run ./cmd/gonx -c gonx.yml
 
-# nginx.conf 格式启动
+# start with an nginx.conf config
 go run ./cmd/gonx -c testdata/nginx_basic.conf
 
-# 校验配置（等价于 nginx -t，两种格式都支持）
+# validate a config (like nginx -t; works for both formats)
 go run ./cmd/gonx -t -c gonx.yml
 
-# 构建
+# build
 go build -o gonx.exe ./cmd/gonx
 ```
 
-## YAML 配置速览
+## YAML config at a glance
 
 ```yaml
 error_log: {path: logs/error.log, level: warn}
@@ -41,7 +76,7 @@ http:
         - {address: 127.0.0.1:9002, backup: true}
 
   servers:
-    - listen: [8080, {address: 443, ssl: true, default: true}]
+    - listen: [8080, {port: 443, ssl: true, default: true}]
       server_name: [example.com, "*.example.org"]
       root: /var/www
       ssl_certificate: /etc/cert.pem
@@ -61,151 +96,232 @@ http:
           limit_req: {zone: perip, burst: 10, nodelay: true}
 ```
 
-未知字段会直接报错（`KnownFields`），避免拼写错误被静默忽略。完整可运行示例见仓库根目录 `gonx.yml`（等价翻译自 `nginx.conf`）。
+Unknown fields are rejected (`KnownFields`) so typos never slip through silently.
+A full runnable example lives at the repo root: `gonx.yml` (a direct translation
+of `nginx.conf`).
 
-启动后访问 <http://localhost:8080/>（静态页）、<http://localhost:8080/ping>（return 指令）。
+After starting, visit <http://localhost:8080/> (static page) and
+<http://localhost:8080/ping> (the `return` directive).
 
-## 已支持的指令（Phase 1-4）
+## Supported directives
 
-| 上下文 | 指令 |
+| Context | Directives |
 |---|---|
-| main | `http` `stream`（`events`/`worker_processes` 等会被接受但忽略） |
-| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` |
-| server | `listen`（含 `default_server` / `ssl`） `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` |
-| location | `root` `alias` `index` `proxy_pass` `return` `rewrite` `try_files`（含 `@named`） `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `proxy_set_header` `proxy_cookie_path` `client_max_body_size` `add_header` `allow`/`deny` `auth_basic`/`auth_basic_user_file` `autoindex` `proxy_connect_timeout`/`proxy_read_timeout` |
-| upstream | `server`（含 `weight=` `max_fails=` `fail_timeout=` `backup` `down`） `least_conn` `ip_hash` |
-
-`http`/`server` 也支持 `add_header` `allow`/`deny` `auth_basic*` `autoindex` `map` 及超时指令（就近覆盖）。
+| main | `http` `stream` (`events` / `worker_processes` etc. are accepted but ignored) |
+| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` |
+| server | `listen` (with `ssl` / `default`) `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` |
+| location | `root` `alias` `index` `proxy_pass` `return` `rewrite` `try_files` (incl. `@named`) `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `proxy_set_header` `proxy_cookie_path` `proxy_redirect` `proxy_hide_header` `proxy_pass_header` `client_max_body_size` `add_header` `allow`/`deny` `auth_basic`/`auth_basic_user_file` `autoindex` `expires` `proxy_connect_timeout`/`proxy_read_timeout` |
+| upstream | `server` (with `weight=` `max_fails=` `fail_timeout=` `backup` `down`) `least_conn` `ip_hash` |
 | stream | `upstream` `server` |
-| stream server | `listen`（含 `udp`） `proxy_pass` `proxy_timeout` `proxy_connect_timeout` `proxy_responses` |
+| stream server | `listen` (with `udp`) `proxy_pass` `proxy_timeout` `proxy_connect_timeout` `proxy_responses` |
 
-`gzip*` = `gzip` `gzip_types` `gzip_min_length` `gzip_comp_level`（http/server/location 三级继承）。
+`http` / `server` also accept `add_header` `allow`/`deny` `auth_basic*`
+`autoindex` `map` and the timeout directives (nearest scope wins).
 
-## 运行时日志
+`gzip*` = `gzip` `gzip_types` `gzip_min_length` `gzip_comp_level` (inherited
+across http/server/location).
 
-默认情况下（配置里没有显式写 `access_log` / `error_log`），gonx 把运行时日志按三类分流到**可执行文件同级的 `log/` 目录**：
+## Runtime logs
 
-| 文件 | 内容 |
+By default (when the config sets no explicit `access_log` / `error_log`), gonx
+splits runtime logs three ways into a `log/` directory **next to the executable**:
+
+| File | Contents |
 |---|---|
-| `log/success.log` | 成功的请求（HTTP 状态码 < 400） |
-| `log/error.log` | 失败的请求（状态码 ≥ 400） |
-| `log/console.log` | 进程消息（启动 / reload / 关闭）和运行错误，同时仍在终端显示 |
+| `log/success.log` | Successful requests (HTTP status < 400) |
+| `log/error.log` | Failed requests (status ≥ 400) |
+| `log/console.log` | Process messages (start / reload / stop) and runtime errors, also echoed to the terminal |
 
-注意：这里的 `error.log` 记录**失败的 HTTP 请求**；进程级错误（对应 nginx 的 error_log）在 `console.log` 里。
+Note: `error.log` here records **failed HTTP requests**; process-level errors
+(nginx's `error_log`) go to `console.log`.
 
-- 目录基于**可执行文件位置**，不是当前工作目录——放哪跑就在哪建 `log/`。
-- 配置里显式写了 `access_log` / `error_log` 时以配置为准，不再分流。
-- `console.log` 里的启动 `listening on` 行是 info 级别，默认 error 级别会过滤掉；把 `error_log.level` 设成 `info` 即可看到。
-- 配合 `gonx -s reopen` 可做日志轮转。
+- The directory is based on the **executable's location**, not the working
+  directory — `log/` is created wherever the binary runs.
+- If the config sets `access_log` / `error_log` explicitly, that wins and no
+  split happens.
+- The `listening on` line in `console.log` is info level and filtered out by the
+  default `error` level; set `error_log.level` to `info` to see it.
+- Pair with `gonx -s reopen` for log rotation.
 
-## 运维命令（对应 nginx -s）
+## Ops commands
+
+Like `nginx -s`:
 
 ```sh
-gonx -s reload -c <conf>   # 热重载：新配置校验通过才会切换，失败保持旧配置继续跑
-gonx -s reopen -c <conf>   # 重开日志文件（配合 logrotate 等外部轮转工具）
-gonx -s status -c <conf>   # 查看运行状态
-gonx -s stop   -c <conf>   # 优雅停止
-gonx -s ui     -c <conf>   # 打开浏览器管理页面
+gonx -s reload -c <conf>   # hot reload: switches only if the new config validates
+gonx -s reopen -c <conf>   # reopen log files (for external logrotate)
+gonx -s status -c <conf>   # show runtime status
+gonx -s stop   -c <conf>   # graceful stop
+gonx -s ui     -c <conf>   # open the browser admin console
 ```
 
-## 管理页面
+## Admin console
 
-管理页面**跑在 gonx 服务进程内部**（控制通道就是它），有两种打开方式：
+The admin console **runs inside the gonx server process** (it is the control
+channel). Two ways to open it:
 
-1. `gonx -s ui -c <conf>` —— 随时打开浏览器（适合默认的随机端口 + 随机 token）
-2. 配置里固定地址，启动即可用（可收藏书签、可自动弹浏览器）：
+1. `gonx -s ui -c <conf>` — open the browser any time (works with the default
+   random port + random token)
+2. Pin the address in the config so it is ready at startup (bookmarkable,
+   optional auto-open):
 
 ```yaml
 ui:
-  listen: 127.0.0.1:8899   # 固定管理端口（默认随机）
-  token: my-secret          # 固定访问令牌（默认每次启动随机生成）
-  open: true                # 启动时自动打开浏览器
+  listen: 127.0.0.1:8899   # fixed admin port (random by default)
+  token: my-secret          # fixed access token (random per start by default)
+  open: true                # auto-open the browser on startup
+  allow: [127.0.0.1, 192.168.0.0/16]  # IP allow list; only needed when bound to 0.0.0.0
 ```
 
-启动时管理页面地址会打印到终端和 console.log。`ui` 段修改后需重启生效（reload 不影响控制通道）。注意 `listen` 保持 127.0.0.1；绑定非回环地址会让局域网可访问管理台（gonx 会警告）。
+The admin URL is printed to the terminal and `console.log` at startup. Changes to
+the `ui` section require a full restart (reload does not rebuild the control
+channel — gonx warns you if you reload after changing it). Keep `listen` on
+`127.0.0.1`; binding a non-loopback address makes the console reachable from the
+network — add an `allow` list, or gonx warns.
 
-页面功能：
+Features:
 
-- **请求统计**：总数 / 2xx / 3xx / 4xx / 5xx 实时刷新（自本次启动累计）
-- **一键操作**：重载配置、重开日志、优雅停止
-- **日志查看**：success.log / error.log / console.log 尾部 200 行，可自动刷新
-- **配置在线编辑**：改完先经真实解析器校验（坏配置直接 400 拒绝），保存自动备份 `.bak`，可一键"保存并重载"
+- **Request stats**: total / 2xx / 3xx / 4xx / 5xx, live, with per-port filter
+- **One-click actions**: reload config, reopen logs, graceful stop
+- **Log viewer**: tail 200 lines of success.log / error.log / console.log, auto-refresh, with line numbers
+- **In-browser config editor**: VS Code-style syntax highlighting; validated by
+  the real parser before saving (a bad config is rejected with 400), auto-backup
+  to `.bak`, one-click "save & reload"; a config help drawer with a full annotated example
 
-页面为单文件内嵌 HTML（无外部资源），自适应亮/暗色，Windows / Linux 通用。
+The page is a single self-contained HTML file (no external assets), light/dark
+theme aware, and works on Windows / Linux.
 
-## Linux 部署
+## Linux deployment
 
-纯 Go 无 cgo，交叉编译即可，产物是无依赖静态二进制（任意发行版 / scratch 容器可用）：
+Pure Go, no cgo — cross-compile to a dependency-free static binary (runs on any
+distro, or a `scratch` container):
 
 ```sh
 CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o gonx ./cmd/gonx
 # arm64: GOARCH=arm64
 ```
 
-Linux 上额外注意：监听 80/443 需要 root 或 `setcap 'cap_net_bind_service=+ep' gonx`；日志轮转可用标准 logrotate（`mv` + `gonx -s reopen`），没有 Windows 的文件锁限制。
+Or build all targets at once with `./build.sh` (Windows with icon + Linux
+amd64/arm64).
 
-实现方式：主进程在 127.0.0.1 上开一个带 token 的控制端口，信息写入 `<conf>.ctl`（0600 权限），`-s` 命令读它发请求——Windows 没有 SIGHUP，这个方案跨平台一致。注意 reload 是"先建新实例、关旧监听、再起新监听"，端口交接有毫秒级窗口，不是 nginx 那种零停机 fd 传递。
+On Linux: binding ports 80/443 needs root or
+`setcap 'cap_net_bind_service=+ep' gonx`; log rotation works with standard
+logrotate (`mv` + `gonx -s reopen`) with none of Windows' file-locking limits.
 
-行为对齐 nginx 的关键语义：
+The control channel: the main process opens a token-guarded port on 127.0.0.1 and
+writes its address to `<conf>.ctl` (mode 0600), which the `-s` commands read —
+Windows has no SIGHUP, so this approach is consistent across platforms. Note that
+reload is "build the new instance, close old listeners, start new ones", so the
+port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 
-- **location 匹配**：`=` 精确 → `^~` 前缀短路 → `~`/`~*` 正则按配置顺序 → 最长普通前缀
-- **server_name 匹配**：精确 → `*.example.com`（最长）→ `www.*`（最长）→ `~正则` → default server
-- **root vs alias**：`root` 拼接完整 URI，`alias` 替换 location 前缀
-- **proxy_pass**：带 URI 时替换 location 前缀（`/api/x` + `http://b/v1/` → `/v1/x`）；不带则透传原始 URI；默认 `Host: $proxy_host`，并注入 `X-Real-IP` / `X-Forwarded-For` / `X-Forwarded-Proto`
-- **upstream**：平滑加权轮询（与 nginx 同算法）；连接失败自动切换下一台并将故障机摘除 10s（对应默认 `fail_timeout`）
-- **access_log**：内置 `combined` 格式；`log_format` 自定义（支持 `$remote_addr` `$request` `$status` `$body_bytes_sent` `$http_referer` `$http_user_agent` `$host` `$request_time` 等）；路径可写 `stdout` / `stderr` / 文件
-- **变量**：`return`/`rewrite`/`try_files` 中支持 `$uri` `$request_uri` `$args` `$is_args` `$host` `$scheme` `$remote_addr` `$request_method` `$http_*` `$arg_*` `$cookie_*` 等，`${name}` 写法亦可
-- **rewrite**：`last`/`break`/`redirect`/`permanent` 四个 flag，`$1`-`$9` 捕获组，替换串带 `?` 时的参数合并/尾部 `?` 丢弃参数与 nginx 一致；`last` 会重新进行 location 匹配（循环上限 10 次）
-- **try_files**：`try_files $uri $uri/ /fallback;`，最后一项为内部跳转或 `=404` 式状态码，SPA 场景可直接用
-- **HTTPS**：`listen 443 ssl` + `ssl_certificate`/`ssl_certificate_key`，SNI 按 `server_name` 选证书；Go 标准库自动协商 **HTTP/2**
-- **gzip**：按 Content-Type 过滤（`text/html` 恒压缩），`gzip_min_length` 阈值，206/已编码响应自动跳过
-- **负载均衡**：默认平滑加权轮询；`least_conn`（按 active/weight 比例）；`ip_hash`（客户端粘住同一后端，故障顺延）
-- **limit_req**：nginx 同款漏桶算法（`rate=Nr/s|r/m`、`burst=`、`nodelay`），超限 503，未超限但排队的请求按速率延迟放行
-- **limit_conn**：按 key 的并发计数，超限 503
-- **proxy_cache**：磁盘存储 + 内存索引；TTL 优先级为上游 `Cache-Control`/`Expires` > `proxy_cache_valid`；`no-store`/`private`/`Set-Cookie`/带 `Authorization` 的请求不缓存；响应带 `X-Cache-Status: HIT|MISS`。重启后缓存冷启动（索引不持久化），暂不处理 `Vary`
-- 未知指令会打印警告并忽略，不会导致启动失败——真实的 nginx.conf 大多可以直接喂进来
+## nginx-aligned semantics
 
-- **stream（L4）**：TCP 与 UDP 代理，支持 upstream 负载均衡与故障切换；UDP 按客户端地址维护会话，`proxy_responses` 控制会话提前回收
-- **error_page**：拦截 gonx 自身产生的错误（404/502/503 等）内部跳转到自定义页面并保留原状态码；上游返回的错误默认透传（对齐 `proxy_intercept_errors off`，API 的 JSON 错误不会被换成 HTML）
-- **client_max_body_size**：超限返回 413，chunked 请求边读边限
-- **add_header**：支持 `always` 参数；遵循 nginx 就近覆盖（location 有则屏蔽 server/http 层）
-- **allow / deny**：IP / CIDR / `all` 访问控制，按顺序匹配，命中即决定
-- **auth_basic**：HTTP 基础认证，htpasswd 支持 bcrypt / Apache-MD5(`$apr1$`) / SHA1 / 明文
-- **autoindex**：目录列表（nginx 风格 HTML）
-- **命名 location `@name`**：配合 `try_files $uri @backend` 做"静态优先、回落代理"
-- **map 指令 + `$upstream_addr`**：变量系统扩展到映射变量与上游地址，可用于 `log_format`
-- **upstream 健康**：`max_fails` / `fail_timeout` 滑动窗口失败计数、`backup` 备用节点、`down` 手动摘除，成功即重置失败计数
-- **proxy 超时**：`proxy_connect_timeout` / `proxy_read_timeout` 就近覆盖
-- **日志轮转**：`gonx -s reopen` 重开文件句柄，配合外部 logrotate
+- **location matching**: `=` exact → `^~` prefix short-circuit → `~`/`~*` regex
+  in config order → longest plain prefix
+- **server_name matching**: exact → `*.example.com` (longest) → `www.*` (longest)
+  → `~regex` → default server
+- **root vs alias**: `root` appends the full URI, `alias` replaces the location prefix
+- **proxy_pass**: with a URI it replaces the location prefix (`/api/x` +
+  `http://b/v1/` → `/v1/x`); without one it passes the original URI through;
+  default `Host: $proxy_host`, and injects `X-Real-IP` / `X-Forwarded-For` /
+  `X-Forwarded-Proto`
+- **upstream**: smooth weighted round-robin (nginx's algorithm); connection
+  failure fails over to the next backend and takes the failed one out for 10s
+  (default `fail_timeout`)
+- **access_log**: built-in `combined` format; custom `log_format` (supports
+  `$remote_addr` `$request` `$status` `$body_bytes_sent` `$http_referer`
+  `$http_user_agent` `$host` `$request_time` `$upstream_addr` …); path can be
+  `stdout` / `stderr` / a file
+- **variables**: `$uri` `$request_uri` `$args` `$is_args` `$host` `$scheme`
+  `$remote_addr` `$request_method` `$http_*` `$arg_*` `$cookie_*` etc. in
+  `return`/`rewrite`/`try_files`; `${name}` form also works
+- **rewrite**: `last`/`break`/`redirect`/`permanent` flags, `$1`-`$9` captures,
+  the `?` query-merge / trailing-`?` drop behavior matches nginx; `last` re-runs
+  location matching (bounded to 10 cycles)
+- **try_files**: `try_files $uri $uri/ /fallback;`, last item is an internal
+  redirect or a `=404`-style status — ready for SPAs
+- **HTTPS**: `listen 443 ssl` + `ssl_certificate`/`ssl_certificate_key`, certs
+  chosen by SNI on `server_name`; the standard library negotiates **HTTP/2**
+  automatically. TLS 1.2 minimum by default (`ssl_protocols` to override)
+- **gzip**: filtered by Content-Type (`text/html` always), `gzip_min_length`
+  threshold, 206 / already-encoded responses skipped
+- **load balancing**: smooth weighted round-robin default; `least_conn` (by
+  active/weight ratio); `ip_hash` (client sticks to one backend, fails over)
+- **limit_req**: nginx's leaky-bucket (`rate=Nr/s|r/m`, `burst=`, `nodelay`),
+  503 over the limit, queued requests released at the rate
+- **limit_conn**: per-key concurrency count, 503 over the limit
+- **proxy_cache**: disk store + in-memory index; TTL priority is upstream
+  `Cache-Control`/`Expires` > `proxy_cache_valid`; `no-store`/`private`/
+  `Set-Cookie`/`Authorization` requests are not cached; responses carry
+  `X-Cache-Status: HIT|MISS`. Cold after restart (index not persisted), `Vary`
+  not yet handled
+- **stream (L4)**: TCP and UDP proxying with upstream load balancing and
+  failover; UDP keeps a session per client address, `proxy_responses` controls
+  early session teardown
+- **error_page**: intercepts gonx-generated errors (404/502/503 …), internally
+  redirects to a custom page keeping the original status; upstream errors pass
+  through (matching `proxy_intercept_errors off`, so a backend's JSON error is
+  never replaced with HTML)
+- **client_max_body_size**: 413 over the limit, enforced while reading chunked bodies
+- **add_header**: supports `always`; nginx nearest-scope override (a location's
+  own headers shadow server/http)
+- **allow / deny**: IP / CIDR / `all` access control, first match wins
+- **auth_basic**: HTTP Basic auth, htpasswd supports bcrypt / Apache-MD5
+  (`$apr1$`) / SHA1 / plaintext
+- **autoindex**: directory listing (nginx-style HTML)
+- **named location `@name`**: with `try_files $uri @backend` for "static first,
+  fall back to proxy"
+- **map + `$upstream_addr`**: variable system extended with mapped variables and
+  the served backend address, usable in `log_format`
+- **upstream health**: `max_fails` / `fail_timeout` sliding-window failure count,
+  `backup` nodes, `down` manual removal, counter reset on success
+- **proxy_redirect / proxy_hide_header / proxy_pass_header**: rewrite the upstream
+  `Location` header and control which response headers pass through
+- **expires**: `Cache-Control` + `Expires` headers (duration / `off` / `epoch` /
+  `max` / negative no-cache)
+- **server_tokens**: whether the `Server` header exposes the version
+- Unknown directives are warned and ignored, so a real nginx.conf mostly runs
+  as-is
 
-## 限制与 Roadmap
+## Limitations and roadmap
 
-单进程多 goroutine 模型，无 master/worker。同一端口不能混用 ssl 和非 ssl。带 body 的请求在 upstream 失败时不重试（body 可能已被消费）。单个缓存对象上限 8MB（超出只透传不缓存）。
+Single-process, multi-goroutine model — no master/worker. One port cannot mix ssl
+and plain. Requests with a body are not retried on upstream failure (the body may
+already be consumed). Single cached object capped at 8MB (larger ones pass
+through uncached).
 
-- **待办**：FastCGI（需要 PHP 场景时再做）、`proxy_cache` 的 Vary 支持与索引持久化、stream 的 TLS 终结
+- **TODO**: FastCGI (for PHP setups), `proxy_cache` `Vary` support and index
+  persistence, TLS termination for stream
 
-## 构建
+## Build
 
 ```sh
-go build -o gonx.exe ./cmd/gonx    # cmd/gonx/rsrc_windows.syso 会自动嵌入图标
-go run ./tools/genicon -o cmd/gonx/gonx.ico   # 重新生成图标（如需改设计）
+go build -o gonx.exe ./cmd/gonx    # cmd/gonx/rsrc_windows.syso embeds the icon
+./build.sh                          # all targets: Windows + Linux amd64/arm64
+
+# regenerate the icon (ico for the exe + png for this README)
+go run ./tools/genicon -o cmd/gonx/gonx.ico -png gonx.png -png-size 200
 ```
 
-## 代码结构
+## Layout
 
 ```
-cmd/gonx/            入口（-c/-t/-v，优雅关闭）
-internal/config/     nginx.conf 词法/语法分析 → AST → 强类型配置
-internal/server/     listen 地址聚合、vhost 匹配、location 匹配、访问日志
-internal/handler/    静态文件（root/alias/index）、反向代理（含 upstream 重试）
-internal/upstream/   平滑加权轮询池
-internal/logging/    access log（可自定义格式）、分级 error log
+cmd/gonx/            entry point (-c/-t/-v/-s, graceful shutdown), admin console
+internal/config/     nginx.conf lexer/parser → AST → typed config; YAML loader
+internal/server/     listen aggregation, vhost & location matching, access logs
+internal/handler/    static files (root/alias/index), reverse proxy (with retry), gzip, cache
+internal/upstream/   load-balancing pools
+internal/logging/    access log (custom formats), leveled error log
+internal/{limiter,cache,auth,stream,vars}/  rate limiting, proxy cache, htpasswd, L4 proxy, variables
 ```
 
-## 测试
+## Tests
 
 ```sh
 go test ./...
 ```
 
-覆盖：配置解析（含引号/注释/错误恢复）、location/server_name 匹配矩阵、WRR 权重分布与摘除、端到端（静态 + 反代 + URI 替换 + upstream 故障切换 + 多虚拟主机）。
+Covers: config parsing (quotes/comments/error recovery), location & server_name
+matching matrices, weighted round-robin distribution and eviction, and end-to-end
+(static + proxy + URI replacement + upstream failover + multiple vhosts + TLS/SNI
++ rate limiting + cache + admin API).
