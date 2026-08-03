@@ -1,5 +1,7 @@
 # gonx
 
+> 发布说明 / Release Notes：[中文](RELEASE_NOTES_CN.md) · [English](RELEASE_NOTES_EN.md) — 当前版本 v0.4.0
+
 用 Go 写的类 nginx Web 服务器 / 反向代理。支持两种配置格式，按文件扩展名自动识别：
 
 - **`.yml` / `.yaml`** —— gonx 原生 YAML 格式（推荐自用，见 `gonx.yml`）
