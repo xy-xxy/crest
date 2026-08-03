@@ -22,9 +22,10 @@ import (
 	"gonx/internal/server"
 )
 
-const version = "0.4.0"
+const version = "0.4.1"
 
 func main() {
+	server.Version = version
 	confPath := flag.String("c", "gonx.conf", "path to configuration file")
 	testOnly := flag.Bool("t", false, "test configuration and exit")
 	showVersion := flag.Bool("v", false, "print version and exit")
@@ -210,8 +211,11 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		}
 		token = hex.EncodeToString(buf)
 	}
+	// 监听地址可能是通配（0.0.0.0 / ::），浏览器和 -s 命令都连不了，
+	// 统一换成回环地址（通配监听必然包含 127.0.0.1）
+	reachable := browsableAddr(ln.Addr().String())
 	ctlPath := confPath + ".ctl"
-	if err := os.WriteFile(ctlPath, []byte(ln.Addr().String()+" "+token), 0600); err != nil {
+	if err := os.WriteFile(ctlPath, []byte(reachable+" "+token), 0600); err != nil {
 		ln.Close()
 		return nil, err
 	}
@@ -260,7 +264,7 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 
 	srv := &http.Server{Handler: mux}
 	go srv.Serve(ln)
-	url := "http://" + ln.Addr().String() + "/ui?token=" + token
+	url := "http://" + reachable + "/ui?token=" + token
 	fmt.Fprintf(ru.console, "gonx: 管理页面 %s\n", url)
 	if ui != nil && ui.Open {
 		openBrowser(url)
@@ -269,6 +273,20 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		srv.Close()
 		os.Remove(ctlPath)
 	}, nil
+}
+
+// browsableAddr turns a listen address into one a client can actually
+// connect to: a wildcard host (0.0.0.0, ::, empty) becomes 127.0.0.1.
+func browsableAddr(addr string) string {
+	host, port, err := net.SplitHostPort(addr)
+	if err != nil {
+		return addr
+	}
+	switch host {
+	case "", "0.0.0.0", "::", "[::]":
+		return "127.0.0.1:" + port
+	}
+	return net.JoinHostPort(host, port)
 }
 
 func sendSignal(action, confPath string) error {

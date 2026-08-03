@@ -1,6 +1,6 @@
 # gonx
 
-> 发布说明 / Release Notes：[中文](RELEASE_NOTES_CN.md) · [English](RELEASE_NOTES_EN.md) — 当前版本 v0.4.0
+> 发布说明 / Release Notes：[中文](RELEASE_NOTES_CN.md) · [English](RELEASE_NOTES_EN.md) — 当前版本 v0.4.1
 
 用 Go 写的类 nginx Web 服务器 / 反向代理。支持两种配置格式，按文件扩展名自动识别：
 

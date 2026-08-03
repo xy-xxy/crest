@@ -31,13 +31,30 @@ type CookieRewrite struct {
 	From, To string
 }
 
+// RedirectRewrite is one proxy_redirect prefix replacement applied to the
+// backend's Location header. From "off" disables rewriting entirely and
+// From "default" expands to proxy_pass URL → location prefix.
+type RedirectRewrite struct {
+	From, To string
+}
+
 // ProxyOptions carries per-location proxy settings.
 type ProxyOptions struct {
 	Prefix         string
 	Headers        []HeaderPair
 	Cookies        []CookieRewrite
-	ConnectTimeout time.Duration // 0 → 60s (proxy_connect_timeout default)
-	ReadTimeout    time.Duration // 0 → 60s (proxy_read_timeout default)
+	Redirects      []RedirectRewrite // empty = nginx's implicit "default"
+	HideHeaders    []string          // proxy_hide_header, on top of defaults
+	PassHeaders    []string          // proxy_pass_header, re-enables defaults
+	ConnectTimeout time.Duration     // 0 → 60s (proxy_connect_timeout default)
+	ReadTimeout    time.Duration     // 0 → 60s (proxy_read_timeout default)
+}
+
+// defaultHiddenHeaders mirrors nginx: internal X-Accel-* plus Date/Server,
+// which the front server re-issues itself.
+var defaultHiddenHeaders = []string{
+	"Date", "Server", "X-Accel-Expires", "X-Accel-Redirect",
+	"X-Accel-Limit-Rate", "X-Accel-Buffering", "X-Accel-Charset",
 }
 
 // NewProxy builds the handler behind proxy_pass. If the target host names a
@@ -116,15 +133,60 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 		}
 	}
 
-	var modifyResponse func(*http.Response) error
-	if len(cookies) > 0 {
-		modifyResponse = func(resp *http.Response) error {
+	// 组装响应处理：隐藏头 → Set-Cookie 路径改写 → Location 重定向改写
+	hidden := map[string]bool{}
+	for _, h := range defaultHiddenHeaders {
+		hidden[http.CanonicalHeaderKey(h)] = true
+	}
+	for _, h := range opts.HideHeaders {
+		hidden[http.CanonicalHeaderKey(h)] = true
+	}
+	for _, h := range opts.PassHeaders {
+		delete(hidden, http.CanonicalHeaderKey(h))
+	}
+
+	// proxy_redirect：无指令 → 隐式 default；"off" → 关闭；显式规则按序匹配
+	var redirects []RedirectRewrite
+	redirectOff := false
+	src := opts.Redirects
+	if len(src) == 0 && prefix != "" {
+		src = []RedirectRewrite{{From: "default"}}
+	}
+	for _, rr := range src {
+		switch rr.From {
+		case "off":
+			redirectOff = true
+		case "default":
+			if prefix != "" {
+				redirects = append(redirects, RedirectRewrite{From: rawURL, To: prefix})
+			}
+		default:
+			redirects = append(redirects, rr)
+		}
+	}
+	if redirectOff {
+		redirects = nil
+	}
+
+	modifyResponse := func(resp *http.Response) error {
+		for h := range hidden {
+			resp.Header.Del(h)
+		}
+		if len(cookies) > 0 {
 			sc := resp.Header["Set-Cookie"]
 			for i, v := range sc {
 				sc[i] = rewriteCookiePath(v, cookies)
 			}
-			return nil
 		}
+		if loc := resp.Header.Get("Location"); loc != "" {
+			for _, rr := range redirects {
+				if strings.HasPrefix(loc, rr.From) {
+					resp.Header.Set("Location", rr.To+loc[len(rr.From):])
+					break
+				}
+			}
+		}
+		return nil
 	}
 
 	var transport http.RoundTripper = &http.Transport{

@@ -11,16 +11,25 @@ import (
 	"gonx/internal/vars"
 )
 
-// respWriter captures status and byte count for access logging.
+// respWriter captures status and byte count for access logging, and stamps
+// the Server header (server_tokens) unless the response already carries one.
 type respWriter struct {
 	http.ResponseWriter
-	status int
-	bytes  int64
+	status       int
+	bytes        int64
+	serverHeader string
+}
+
+func (w *respWriter) ensureHeaders() {
+	if w.serverHeader != "" && w.Header().Get("Server") == "" {
+		w.Header().Set("Server", w.serverHeader)
+	}
 }
 
 func (w *respWriter) WriteHeader(code int) {
 	if w.status == 0 {
 		w.status = code
+		w.ensureHeaders()
 	}
 	w.ResponseWriter.WriteHeader(code)
 }
@@ -28,6 +37,7 @@ func (w *respWriter) WriteHeader(code int) {
 func (w *respWriter) Write(b []byte) (int, error) {
 	if w.status == 0 {
 		w.status = http.StatusOK
+		w.ensureHeaders()
 	}
 	n, err := w.ResponseWriter.Write(b)
 	w.bytes += int64(n)

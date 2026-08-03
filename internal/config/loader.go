@@ -22,9 +22,10 @@ type Config struct {
 // UIConfig pins the admin console / control channel. All fields optional:
 // zero values keep the default random loopback port + per-start token.
 type UIConfig struct {
-	Listen string // fixed address, e.g. "127.0.0.1:8899"
-	Token  string // fixed token; "" = random per start
-	Open   bool   // auto-open the browser on startup
+	Listen string   // fixed address, e.g. "127.0.0.1:8899"
+	Token  string   // fixed token; "" = random per start
+	Open   bool     // auto-open the browser on startup
+	Allow  []string // IP/CIDR allow list; empty = no IP restriction
 }
 
 // Stream is the L4 proxy configuration.
@@ -65,6 +66,21 @@ type HTTP struct {
 	Maps                []MapVar
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	Expires             *Expires
+	ServerTokens        *bool
+	SSLProtocols        []string
+}
+
+// Expires is a parsed "expires" directive (ngx_http_headers_module).
+type Expires struct {
+	Mode     string        // "off", "epoch", "max", "duration", "nocache"
+	Duration time.Duration // for Mode "duration"
+}
+
+// ProxyRedirect is one proxy_redirect rule. From "off" disables rewriting,
+// From "default" maps the proxy_pass URL back to the location prefix.
+type ProxyRedirect struct {
+	From, To string
 }
 
 type Upstream struct {
@@ -153,6 +169,9 @@ type Server struct {
 	Autoindex           *bool
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	Expires             *Expires
+	ServerTokens        *bool
+	SSLProtocols        []string
 	Line                int
 }
 
@@ -186,6 +205,10 @@ type Location struct {
 	Autoindex           *bool
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	Expires             *Expires
+	ProxyRedirects      []ProxyRedirect
+	HideHeaders         []string
+	PassHeaders         []string
 	Line                int
 }
 
@@ -287,6 +310,11 @@ func Load(ds []Directive) (*Config, error) {
 						return nil, err
 					}
 					u.Open = *b
+				case "allow":
+					if len(e.Args) == 0 {
+						return nil, errDirective(e, "needs at least one address")
+					}
+					u.Allow = append(u.Allow, e.Args...)
 				default:
 					cfg.warnf(e, "unknown directive %q in ui block (ignored)", e.Name)
 				}
@@ -546,8 +574,25 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.Maps = append(h.Maps, m)
+		case "expires":
+			e, err := parseExpiresDirective(d)
+			if err != nil {
+				return nil, err
+			}
+			h.Expires = e
+		case "server_tokens":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			h.ServerTokens = b
+		case "ssl_protocols":
+			if err := validateSSLProtocols(d.Args); err != nil {
+				return nil, errDirective(d, err.Error())
+			}
+			h.SSLProtocols = d.Args
 		case "proxy_send_timeout", "default_type", "sendfile", "keepalive_timeout",
-			"tcp_nopush", "tcp_nodelay", "server_tokens", "types_hash_max_size":
+			"tcp_nopush", "tcp_nodelay", "types_hash_max_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
 			cfg.warnf(d, "unknown directive %q in http block (ignored)", d.Name)
@@ -695,6 +740,23 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 			} else {
 				s.ProxyReadTimeout = t
 			}
+		case "expires":
+			e, err := parseExpiresDirective(d)
+			if err != nil {
+				return nil, err
+			}
+			s.Expires = e
+		case "server_tokens":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			s.ServerTokens = b
+		case "ssl_protocols":
+			if err := validateSSLProtocols(d.Args); err != nil {
+				return nil, errDirective(d, err.Error())
+			}
+			s.SSLProtocols = d.Args
 		case "proxy_send_timeout", "keepalive_timeout", "tcp_nopush", "tcp_nodelay",
 			"sendfile", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -851,6 +913,34 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 			} else {
 				loc.ProxyReadTimeout = t
 			}
+		case "expires":
+			e, err := parseExpiresDirective(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.Expires = e
+		case "proxy_redirect":
+			switch len(d.Args) {
+			case 1:
+				if d.Args[0] != "off" && d.Args[0] != "default" {
+					return nil, errDirective(d, `single argument must be "off" or "default"`)
+				}
+				loc.ProxyRedirects = append(loc.ProxyRedirects, ProxyRedirect{From: d.Args[0]})
+			case 2:
+				loc.ProxyRedirects = append(loc.ProxyRedirects, ProxyRedirect{From: d.Args[0], To: d.Args[1]})
+			default:
+				return nil, errDirective(d, "invalid number of arguments")
+			}
+		case "proxy_hide_header":
+			if len(d.Args) != 1 {
+				return nil, errDirective(d, "needs exactly one argument")
+			}
+			loc.HideHeaders = append(loc.HideHeaders, d.Args[0])
+		case "proxy_pass_header":
+			if len(d.Args) != 1 {
+				return nil, errDirective(d, "needs exactly one argument")
+			}
+			loc.PassHeaders = append(loc.PassHeaders, d.Args[0])
 		case "proxy_send_timeout", "proxy_buffering", "proxy_http_version", "chunked_transfer_encoding",
 			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -1014,6 +1104,59 @@ func parseNginxTime(s string) (time.Duration, error) {
 		return 0, fmt.Errorf("invalid time %q", s)
 	}
 	return time.Duration(n) * unit, nil
+}
+
+// parseExpiresValue parses an expires value: off / epoch / max / 30d / -1.
+func parseExpiresValue(s string) (*Expires, error) {
+	switch s {
+	case "off":
+		return &Expires{Mode: "off"}, nil
+	case "epoch":
+		return &Expires{Mode: "epoch"}, nil
+	case "max":
+		return &Expires{Mode: "max"}, nil
+	}
+	neg := strings.HasPrefix(s, "-")
+	t, err := parseNginxTime(strings.TrimPrefix(s, "-"))
+	if err != nil {
+		return nil, fmt.Errorf("invalid expires value %q", s)
+	}
+	if neg {
+		return &Expires{Mode: "nocache", Duration: -t}, nil
+	}
+	return &Expires{Mode: "duration", Duration: t}, nil
+}
+
+func parseExpiresDirective(d *Directive) (*Expires, error) {
+	if len(d.Args) != 1 {
+		return nil, errDirective(d, "needs exactly one argument")
+	}
+	e, err := parseExpiresValue(d.Args[0])
+	if err != nil {
+		return nil, errDirective(d, err.Error())
+	}
+	return e, nil
+}
+
+// SSLProtocolVersions maps nginx ssl_protocols names to TLS version codes
+// (crypto/tls constants). Exposed for the server package.
+var SSLProtocolVersions = map[string]uint16{
+	"TLSv1":   0x0301,
+	"TLSv1.1": 0x0302,
+	"TLSv1.2": 0x0303,
+	"TLSv1.3": 0x0304,
+}
+
+func validateSSLProtocols(list []string) error {
+	if len(list) == 0 {
+		return fmt.Errorf("ssl_protocols needs at least one protocol")
+	}
+	for _, p := range list {
+		if _, ok := SSLProtocolVersions[p]; !ok {
+			return fmt.Errorf("unknown protocol %q (use TLSv1, TLSv1.1, TLSv1.2, TLSv1.3)", p)
+		}
+	}
+	return nil
 }
 
 func parseAddHeader(d *Directive) (AddHeader, error) {

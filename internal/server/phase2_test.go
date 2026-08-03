@@ -283,3 +283,48 @@ func selfSigned(t *testing.T, dir, name, host string) (certPath, keyPath string)
 	kf.Close()
 	return certPath, keyPath
 }
+
+func TestTLSMinVersion(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := selfSigned(t, dir, "m", "localhost")
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 443 ssl;
+        server_name localhost;
+        ssl_certificate "%s";
+        ssl_certificate_key "%s";
+        location / { return 200 "ok"; }
+    }
+}
+`, filepath.ToSlash(crt), filepath.ToSlash(key))
+	inst := buildInstance(t, conf)
+	a := inst.Addrs[0]
+	if a.tlsConf == nil || a.tlsConf.MinVersion != tls.VersionTLS12 {
+		t.Fatalf("TLS MinVersion should be 1.2, got %#x", a.tlsConf.MinVersion)
+	}
+	ln, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	srv := &http.Server{Handler: a, TLSConfig: a.tlsConf}
+	go srv.ServeTLS(ln, "", "")
+	defer srv.Close()
+
+	dial := func(max uint16) error {
+		c, err := tls.Dial("tcp", ln.Addr().String(),
+			&tls.Config{InsecureSkipVerify: true, MinVersion: max, MaxVersion: max})
+		if err == nil {
+			c.Close()
+		}
+		return err
+	}
+	if dial(tls.VersionTLS11) == nil {
+		t.Error("TLS 1.1 should be rejected")
+	}
+	if err := dial(tls.VersionTLS12); err != nil {
+		t.Errorf("TLS 1.2 should be accepted: %v", err)
+	}
+}

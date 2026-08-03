@@ -2,6 +2,7 @@ package server
 
 import (
 	"context"
+	"crypto/tls"
 	"fmt"
 	"io"
 	"net/http"
@@ -235,5 +236,142 @@ http {
 	}
 	if !strings.Contains(line, "got-get") {
 		t.Errorf("$mapped (map GET) not resolved: %q", line)
+	}
+}
+
+func TestBatch1Expires(t *testing.T) {
+	dir := t.TempDir()
+	mustWrite(t, filepath.Join(dir, "a.txt"), "x")
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        root "%s";
+        location / {
+            expires 1h;
+        }
+    }
+}
+`, filepath.ToSlash(dir))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+	resp, err := ts.Client().Get(ts.URL + "/a.txt")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if cc := resp.Header.Get("Cache-Control"); cc != "max-age=3600" {
+		t.Errorf("Cache-Control = %q, want max-age=3600", cc)
+	}
+	if resp.Header.Get("Expires") == "" {
+		t.Error("Expires header missing")
+	}
+}
+
+func TestBatch1ServerTokens(t *testing.T) {
+	on := `
+http {
+    access_log off;
+    error_log stderr crit;
+    server { listen 8080; location / { return 200 "ok"; } }
+}`
+	off := `
+http {
+    access_log off;
+    error_log stderr crit;
+    server_tokens off;
+    server { listen 8080; location / { return 200 "ok"; } }
+}`
+	for _, tc := range []struct{ conf, wantPrefix string }{
+		{on, "gonx/"}, // 带版本
+		{off, "gonx"}, // 仅名称
+	} {
+		inst := buildInstance(t, tc.conf)
+		ts := httptest.NewServer(inst.Addrs[0])
+		resp, err := ts.Client().Get(ts.URL + "/")
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		got := resp.Header.Get("Server")
+		if tc.wantPrefix == "gonx/" && got != "gonx/"+Version {
+			t.Errorf("server_tokens on: Server = %q", got)
+		}
+		if tc.wantPrefix == "gonx" && got != "gonx" {
+			t.Errorf("server_tokens off: Server = %q, want plain gonx", got)
+		}
+		ts.Close()
+	}
+}
+
+func TestBatch1ProxyRedirectAndHideHeader(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Location", "http://backend.internal:9000/app/next")
+		w.Header().Set("X-Secret", "leak")
+		w.Header().Set("X-Keep", "ok")
+		w.WriteHeader(302)
+	}))
+	defer backend.Close()
+	bu, _ := url.Parse(backend.URL)
+
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        location /api/ {
+            proxy_pass http://%s/;
+            proxy_redirect http://backend.internal:9000/ /api/;
+            proxy_hide_header X-Secret;
+        }
+    }
+}
+`, bu.Host)
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+	c := ts.Client()
+	c.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+	resp, err := c.Get(ts.URL + "/api/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if loc := resp.Header.Get("Location"); loc != "/api/app/next" {
+		t.Errorf("proxy_redirect: Location = %q, want /api/app/next", loc)
+	}
+	if resp.Header.Get("X-Secret") != "" {
+		t.Error("proxy_hide_header: X-Secret should be hidden")
+	}
+	if resp.Header.Get("X-Keep") != "ok" {
+		t.Error("X-Keep should pass through")
+	}
+}
+
+func TestBatch1SSLProtocols(t *testing.T) {
+	dir := t.TempDir()
+	crt, key := selfSigned(t, dir, "p", "localhost")
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    ssl_protocols TLSv1.3;
+    server {
+        listen 443 ssl;
+        server_name localhost;
+        ssl_certificate "%s";
+        ssl_certificate_key "%s";
+        location / { return 200 "ok"; }
+    }
+}
+`, filepath.ToSlash(crt), filepath.ToSlash(key))
+	inst := buildInstance(t, conf)
+	a := inst.Addrs[0]
+	if a.tlsConf.MinVersion != tls.VersionTLS13 || a.tlsConf.MaxVersion != tls.VersionTLS13 {
+		t.Errorf("ssl_protocols TLSv1.3: min=%#x max=%#x", a.tlsConf.MinVersion, a.tlsConf.MaxVersion)
 	}
 }

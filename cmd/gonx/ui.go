@@ -544,6 +544,8 @@ stream:
       <tr><td>server_name</td><td>按 Host 匹配：精确 / *.foo / foo.* / ~正则</td><td>[example.com, "*.example.org"]</td></tr>
       <tr><td>root / index</td><td>静态根目录与默认页</td><td>root: dist</td></tr>
       <tr><td>ssl_certificate(_key)</td><td>PEM 证书 + 私钥；多 server 自动按 SNI 选择；TLS 下自动启用 HTTP/2</td><td>ssl_certificate: cert.pem</td></tr>
+      <tr><td>ssl_protocols</td><td>允许的 TLS 版本（缺省最低 TLSv1.2）</td><td>[TLSv1.2, TLSv1.3]</td></tr>
+      <tr><td>server_tokens</td><td>Server 响应头：true 带版本 / false 仅 gonx</td><td>server_tokens: false</td></tr>
       <tr><td>error_pages</td><td>自定义错误页（仅拦截 gonx 自身错误，上游错误透传）</td><td>[{codes: [502,503], uri: /50x.html}]</td></tr>
       <tr><td>rewrites</td><td>server 级重写，location 匹配前执行</td><td>见 location</td></tr>
       <tr><td>locations</td><td>路由规则列表</td><td></td></tr></table></details>
@@ -555,6 +557,9 @@ stream:
       <tr><td>proxy_pass</td><td>反向代理；host 为 upstream 名或地址；带尾部 / 时替换匹配前缀；WebSocket 自动升级</td><td>http://pool/</td></tr>
       <tr><td>proxy_set_header</td><td>传给后端的请求头（支持变量）</td><td>{Host: $host, X-Real-IP: $remote_addr}</td></tr>
       <tr><td>proxy_cookie_path</td><td>改写后端 Set-Cookie 的 Path 前缀</td><td>[{from: /api/, to: /}]</td></tr>
+      <tr><td>proxy_redirect</td><td>改写后端 3xx 的 Location 头前缀；off 关闭，缺省按 proxy_pass→location 自动改</td><td>[{from: 'http://backend/', to: /api/}]</td></tr>
+      <tr><td>proxy_hide_header / proxy_pass_header</td><td>隐藏 / 放行后端响应头（默认已隐藏 Date/Server/X-Accel-*）</td><td>proxy_hide_header: [X-Secret]</td></tr>
+      <tr><td>expires</td><td>加缓存头：时长(30d) / off / epoch / max / 负值(no-cache)</td><td>expires: 7d</td></tr>
       <tr><td>return</td><td>直接响应；30x + body 为跳转</td><td>{code: 200, body: "ok $scheme"}</td></tr>
       <tr><td>rewrites</td><td>正则重写；flag: last / break / redirect / permanent；$1-$9 捕获组</td><td>{pattern: "^/old/(.*)$", replacement: /new/$1, flag: permanent}</td></tr>
       <tr><td>try_files</td><td>依次探测文件，末项为兜底（URI / =404 / @named）；SPA 常用</td><td>[$uri, $uri/, /index.html]</td></tr>

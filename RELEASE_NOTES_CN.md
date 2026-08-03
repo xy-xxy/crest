@@ -2,6 +2,16 @@
 
 本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
 
+## v0.4.1
+
+对齐 nginx 的功能补齐（第一批）：
+
+- `expires` —— 响应缓存头（时长 / `off` / `epoch` / `max` / 负值 no-cache），http/server/location 就近覆盖。
+- `proxy_redirect` —— 改写后端 3xx 的 `Location` 头；`off` 关闭，缺省按 `proxy_pass` → location 前缀自动改写。
+- `proxy_hide_header` / `proxy_pass_header` —— 控制后端响应头透传；默认隐藏 `Date` / `Server` / `X-Accel-*`。
+- `server_tokens` —— 控制 `Server` 响应头是否带版本号（安全加固）。
+- `ssl_protocols` —— 可配置允许的 TLS 版本（http/server 层），缺省最低 TLS 1.2。
+
 ## v0.4.0
 
 首个正式发布版本。gonx 是一个用 Go 编写的 nginx 替代品：单文件、无外部依赖，

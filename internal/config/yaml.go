@@ -31,9 +31,10 @@ type yamlRoot struct {
 }
 
 type yamlUI struct {
-	Listen string `yaml:"listen"`
-	Token  string `yaml:"token"`
-	Open   bool   `yaml:"open"`
+	Listen string   `yaml:"listen"`
+	Token  string   `yaml:"token"`
+	Open   bool     `yaml:"open"`
+	Allow  []string `yaml:"allow"`
 }
 
 type yamlErrorLog struct {
@@ -53,6 +54,7 @@ type yamlCommon struct {
 	ClientMaxBodySize   string       `yaml:"client_max_body_size"`
 	ProxyConnectTimeout string       `yaml:"proxy_connect_timeout"`
 	ProxyReadTimeout    string       `yaml:"proxy_read_timeout"`
+	Expires             string       `yaml:"expires"`
 }
 
 type yamlHTTP struct {
@@ -65,6 +67,8 @@ type yamlHTTP struct {
 	CachePaths     map[string]string           `yaml:"cache_paths"`      // name → dir
 	Maps           []yamlMap                   `yaml:"maps"`
 	Servers        []*yamlServer               `yaml:"servers"`
+	ServerTokens   *bool                       `yaml:"server_tokens"`
+	SSLProtocols   []string                    `yaml:"ssl_protocols"`
 }
 
 type yamlAccessLog struct {
@@ -123,19 +127,21 @@ type yamlMap struct {
 }
 
 type yamlServer struct {
-	yamlCommon `yaml:",inline"`
-	Listen     []yamlListen     `yaml:"listen"`
-	ServerName []string         `yaml:"server_name"`
-	AccessLog  *yamlAccessLog   `yaml:"access_log"`
-	SSLCert    string           `yaml:"ssl_certificate"`
-	SSLKey     string           `yaml:"ssl_certificate_key"`
-	Rewrites   []yamlRewrite    `yaml:"rewrites"`
-	ProxyCache string           `yaml:"proxy_cache"`
-	CacheValid []yamlCacheValid `yaml:"proxy_cache_valid"`
-	ErrorPages []yamlErrorPage  `yaml:"error_pages"`
-	LimitReq   *yamlLimitReq    `yaml:"limit_req"`
-	LimitConn  *yamlLimitConn   `yaml:"limit_conn"`
-	Locations  []*yamlLocation  `yaml:"locations"`
+	yamlCommon   `yaml:",inline"`
+	Listen       []yamlListen     `yaml:"listen"`
+	ServerName   []string         `yaml:"server_name"`
+	AccessLog    *yamlAccessLog   `yaml:"access_log"`
+	SSLCert      string           `yaml:"ssl_certificate"`
+	SSLKey       string           `yaml:"ssl_certificate_key"`
+	Rewrites     []yamlRewrite    `yaml:"rewrites"`
+	ProxyCache   string           `yaml:"proxy_cache"`
+	CacheValid   []yamlCacheValid `yaml:"proxy_cache_valid"`
+	ErrorPages   []yamlErrorPage  `yaml:"error_pages"`
+	LimitReq     *yamlLimitReq    `yaml:"limit_req"`
+	LimitConn    *yamlLimitConn   `yaml:"limit_conn"`
+	Locations    []*yamlLocation  `yaml:"locations"`
+	ServerTokens *bool            `yaml:"server_tokens"`
+	SSLProtocols []string         `yaml:"ssl_protocols"`
 }
 
 // yamlListen accepts either a bare port/address (scalar) or a mapping with
@@ -215,20 +221,50 @@ type yamlLimitConn struct {
 }
 
 type yamlLocation struct {
-	yamlCommon   `yaml:",inline"`
-	Path         string            `yaml:"path"`
-	Match        string            `yaml:"match"` // exact | prefix | regex | regex_i | prefix_priority
-	Alias        string            `yaml:"alias"`
-	ProxyPass    string            `yaml:"proxy_pass"`
-	ProxySetHead map[string]string `yaml:"proxy_set_header"`
-	ProxyCookie  []yamlCookiePath  `yaml:"proxy_cookie_path"`
-	Return       *yamlReturn       `yaml:"return"`
-	Rewrites     []yamlRewrite     `yaml:"rewrites"`
-	TryFiles     []string          `yaml:"try_files"`
-	ProxyCache   string            `yaml:"proxy_cache"`
-	CacheValid   []yamlCacheValid  `yaml:"proxy_cache_valid"`
-	LimitReq     *yamlLimitReq     `yaml:"limit_req"`
-	LimitConn    *yamlLimitConn    `yaml:"limit_conn"`
+	yamlCommon    `yaml:",inline"`
+	Path          string              `yaml:"path"`
+	Match         string              `yaml:"match"` // exact | prefix | regex | regex_i | prefix_priority
+	Alias         string              `yaml:"alias"`
+	ProxyPass     string              `yaml:"proxy_pass"`
+	ProxySetHead  map[string]string   `yaml:"proxy_set_header"`
+	ProxyCookie   []yamlCookiePath    `yaml:"proxy_cookie_path"`
+	Return        *yamlReturn         `yaml:"return"`
+	Rewrites      []yamlRewrite       `yaml:"rewrites"`
+	TryFiles      []string            `yaml:"try_files"`
+	ProxyCache    string              `yaml:"proxy_cache"`
+	CacheValid    []yamlCacheValid    `yaml:"proxy_cache_valid"`
+	LimitReq      *yamlLimitReq       `yaml:"limit_req"`
+	LimitConn     *yamlLimitConn      `yaml:"limit_conn"`
+	ProxyRedirect []yamlProxyRedirect `yaml:"proxy_redirect"`
+	HideHeaders   []string            `yaml:"proxy_hide_header"`
+	PassHeaders   []string            `yaml:"proxy_pass_header"`
+}
+
+// yamlProxyRedirect accepts "off" / "default" scalars or {from, to} mappings.
+type yamlProxyRedirect struct {
+	From, To string
+}
+
+func (p *yamlProxyRedirect) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.ScalarNode {
+		if node.Value != "off" && node.Value != "default" {
+			return fmt.Errorf(`proxy_redirect: scalar entry must be "off" or "default"`)
+		}
+		p.From = node.Value
+		return nil
+	}
+	var m struct {
+		From string `yaml:"from"`
+		To   string `yaml:"to"`
+	}
+	if err := node.Decode(&m); err != nil {
+		return err
+	}
+	if m.From == "" {
+		return fmt.Errorf("proxy_redirect entry needs from/to")
+	}
+	p.From, p.To = m.From, m.To
+	return nil
 }
 
 type yamlCookiePath struct {
@@ -314,6 +350,13 @@ func (yh *yamlHTTP) convert(cfg *Config) (*HTTP, error) {
 	if err := applyCommonToHTTP(h, &yh.yamlCommon); err != nil {
 		return nil, err
 	}
+	h.ServerTokens = yh.ServerTokens
+	if len(yh.SSLProtocols) > 0 {
+		if err := validateSSLProtocols(yh.SSLProtocols); err != nil {
+			return nil, err
+		}
+		h.SSLProtocols = yh.SSLProtocols
+	}
 	for name, yu := range yh.Upstreams {
 		up, err := yu.convert(name)
 		if err != nil {
@@ -380,6 +423,13 @@ func (ys *yamlServer) convert() (*Server, error) {
 	if err := applyCommonToServer(s, &ys.yamlCommon); err != nil {
 		return nil, err
 	}
+	s.ServerTokens = ys.ServerTokens
+	if len(ys.SSLProtocols) > 0 {
+		if err := validateSSLProtocols(ys.SSLProtocols); err != nil {
+			return nil, err
+		}
+		s.SSLProtocols = ys.SSLProtocols
+	}
 	for _, r := range ys.Rewrites {
 		rw, err := r.convert()
 		if err != nil {
@@ -442,6 +492,11 @@ func (yl *yamlLocation) convert() (*Location, error) {
 		loc.ReturnCode = yl.Return.Code
 		loc.ReturnArg = yl.Return.Body
 	}
+	for _, pr := range yl.ProxyRedirect {
+		loc.ProxyRedirects = append(loc.ProxyRedirects, ProxyRedirect{From: pr.From, To: pr.To})
+	}
+	loc.HideHeaders = yl.HideHeaders
+	loc.PassHeaders = yl.PassHeaders
 	for k, v := range yl.ProxySetHead {
 		loc.ProxyHeaders = append(loc.ProxyHeaders, ProxyHeader{Name: k, Value: v})
 	}
@@ -580,6 +635,9 @@ func applyCommonToHTTP(h *HTTP, c *yamlCommon) error {
 	h.Access = c.access()
 	h.Auth = c.auth()
 	h.Autoindex = c.Autoindex
+	if h.Expires, err = c.expires(); err != nil {
+		return err
+	}
 	return c.sizeAndTimeouts(&h.ClientMaxBody, &h.ProxyConnectTimeout, &h.ProxyReadTimeout)
 }
 
@@ -594,6 +652,9 @@ func applyCommonToServer(s *Server, c *yamlCommon) error {
 	s.Access = c.access()
 	s.Auth = c.auth()
 	s.Autoindex = c.Autoindex
+	if s.Expires, err = c.expires(); err != nil {
+		return err
+	}
 	return c.sizeAndTimeouts(&s.ClientMaxBody, &s.ProxyConnectTimeout, &s.ProxyReadTimeout)
 }
 
@@ -613,7 +674,21 @@ func applyCommonToLocation(loc *Location, c *yamlCommon) error {
 	loc.Access = c.access()
 	loc.Auth = c.auth()
 	loc.Autoindex = c.Autoindex
+	if loc.Expires, err = c.expires(); err != nil {
+		return err
+	}
 	return c.sizeAndTimeouts(&loc.ClientMaxBody, &loc.ProxyConnectTimeout, &loc.ProxyReadTimeout)
+}
+
+func (c *yamlCommon) expires() (*Expires, error) {
+	if c.Expires == "" {
+		return nil, nil
+	}
+	e, err := parseExpiresValue(c.Expires)
+	if err != nil {
+		return nil, fmt.Errorf("expires: %w", err)
+	}
+	return e, nil
 }
 
 func (c *yamlCommon) gzip() (GzipSettings, error) {

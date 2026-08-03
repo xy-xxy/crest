@@ -20,6 +20,8 @@ http:
     - listen: [9999, "9443 ssl"]
       server_name: [myApp]
       index: [index.html, index.htm]
+      ssl_certificate: certs/localhost.crt        # 自签测试证书（浏览器会提示不受信任）
+      ssl_certificate_key: certs/localhost.key
 
       # 500/502/503/504 显示自定义错误页
       error_pages:

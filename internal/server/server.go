@@ -24,6 +24,10 @@ import (
 	"gonx/internal/vars"
 )
 
+// Version is stamped by main; it feeds the Server header (server_tokens)
+// and status displays.
+var Version = "dev"
+
 // Instance is a fully wired gonx server: one AddrServer per listen address.
 type Instance struct {
 	Addrs []*AddrServer
@@ -255,7 +259,28 @@ func (inst *Instance) setupHTTP(h *config.HTTP) (*Instance, error) {
 					return nil, fmt.Errorf("listen %s: server (line %d) has no ssl_certificate", addr, v.cfg.Line)
 				}
 			}
+			// ssl_protocols：默认 server 优先，其次 http 层；未配置则 1.2+
+			minV, maxV := uint16(tls.VersionTLS12), uint16(0)
+			prots := g.def.cfg.SSLProtocols
+			if len(prots) == 0 {
+				prots = h.SSLProtocols
+			}
+			if len(prots) > 0 {
+				minV, maxV = 0xffff, 0
+				for _, p := range prots {
+					v := config.SSLProtocolVersions[p]
+					if v < minV {
+						minV = v
+					}
+					if v > maxV {
+						maxV = v
+					}
+				}
+			}
 			a.tlsConf = &tls.Config{
+				// TLS 1.0/1.1 已被 RFC 8996 弃用；默认最低 1.2
+				MinVersion: minV,
+				MaxVersion: maxV,
 				GetCertificate: func(chi *tls.ClientHelloInfo) (*tls.Certificate, error) {
 					if v := g.match(chi.ServerName); v != nil && v.cert != nil {
 						return v.cert, nil
@@ -305,6 +330,7 @@ func (i *Instance) buildVHost(sv *config.Server, pools map[string]upstream.Pool)
 		st := &handler.Static{Root: root, Prefix: "/", Index: index, Autoindex: boolOr(sv.Autoindex, i.cfg.HTTP.Autoindex), ErrLog: i.errLog}
 		var hd http.Handler = handler.WrapGzip(st, resolveGzip(i.cfg.HTTP.Gzip, sv.Gzip, config.GzipSettings{}))
 		hd = wrapAddHeaders(hd, pickHeaders(i.cfg.HTTP.AddHeaders, sv.AddHeaders, nil))
+		hd = wrapExpires(hd, resolveExpires(i.cfg.HTTP.Expires, sv.Expires, nil))
 		hd, err := i.wrapLimits(hd, sv, nil, nil)
 		if err != nil {
 			return nil, err
@@ -326,7 +352,7 @@ func (i *Instance) buildVHost(sv *config.Server, pools map[string]upstream.Pool)
 	if err != nil {
 		return nil, err
 	}
-	v := &vhost{cfg: sv, locs: locs, names: names}
+	v := &vhost{cfg: sv, locs: locs, names: names, serverHeader: serverHeaderValue(h.ServerTokens, sv.ServerTokens)}
 	v.rewrites, err = compileRewrites(sv.Rewrites)
 	if err != nil {
 		return nil, err
@@ -408,6 +434,7 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 	}
 	hd = handler.WrapGzip(hd, resolveGzip(i.cfg.HTTP.Gzip, sv.Gzip, loc.Gzip))
 	hd = wrapAddHeaders(hd, pickHeaders(i.cfg.HTTP.AddHeaders, sv.AddHeaders, loc.AddHeaders))
+	hd = wrapExpires(hd, resolveExpires(i.cfg.HTTP.Expires, sv.Expires, loc.Expires))
 	hd, err = i.wrapLimits(hd, sv, loc.LimitReq, loc.LimitConn)
 	if err != nil {
 		return nil, fmt.Errorf("location %q: %w", loc.Pattern, err)
@@ -466,7 +493,14 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 		for _, cp := range loc.CookiePaths {
 			cookies = append(cookies, handler.CookieRewrite{From: cp.From, To: cp.To})
 		}
-		opts := handler.ProxyOptions{Prefix: prefix, Headers: headers, Cookies: cookies}
+		redirects := make([]handler.RedirectRewrite, 0, len(loc.ProxyRedirects))
+		for _, pr := range loc.ProxyRedirects {
+			redirects = append(redirects, handler.RedirectRewrite{From: pr.From, To: pr.To})
+		}
+		opts := handler.ProxyOptions{
+			Prefix: prefix, Headers: headers, Cookies: cookies,
+			Redirects: redirects, HideHeaders: loc.HideHeaders, PassHeaders: loc.PassHeaders,
+		}
 		if t := durOr(loc.ProxyConnectTimeout, sv.ProxyConnectTimeout, i.cfg.HTTP.ProxyConnectTimeout); t > 0 {
 			opts.ConnectTimeout = t
 		}
@@ -505,6 +539,31 @@ func durOr(vals ...*time.Duration) time.Duration {
 		}
 	}
 	return 0
+}
+
+// resolveExpires picks the nearest expires setting (http < server < location).
+func resolveExpires(levels ...*config.Expires) *config.Expires {
+	var out *config.Expires
+	for _, e := range levels {
+		if e != nil {
+			out = e
+		}
+	}
+	return out
+}
+
+// serverHeaderValue resolves server_tokens: on (default) exposes the version.
+func serverHeaderValue(levels ...*bool) string {
+	tokens := true
+	for _, b := range levels {
+		if b != nil {
+			tokens = *b
+		}
+	}
+	if tokens {
+		return "gonx/" + Version
+	}
+	return "gonx"
 }
 
 func resolveMaxBody(h *config.HTTP, sv *config.Server, loc *config.Location) int64 {
@@ -661,6 +720,11 @@ func (a *AddrServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = vars.WithExtras(r, nil)
 	}
 	v := a.group.match(r.Host)
+	if v != nil {
+		rw.serverHeader = v.serverHeader
+	} else {
+		rw.serverHeader = serverHeaderValue(a.inst.cfg.HTTP.ServerTokens)
+	}
 	switch {
 	case v == nil:
 		http.NotFound(rw, r)

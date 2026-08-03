@@ -6,6 +6,7 @@ import (
 	"net/netip"
 	"regexp"
 	"strings"
+	"time"
 
 	"gonx/internal/auth"
 	"gonx/internal/config"
@@ -162,6 +163,60 @@ func (i *Instance) wrapAuth(h http.Handler, ab *config.AuthBasic) (http.Handler,
 		}
 		h.ServeHTTP(w, r)
 	}), nil
+}
+
+// wrapExpires applies the expires directive: Cache-Control + Expires headers
+// on cacheable statuses, like ngx_http_headers_module.
+func wrapExpires(h http.Handler, e *config.Expires) http.Handler {
+	if e == nil || e.Mode == "off" {
+		return h
+	}
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		h.ServeHTTP(&expiresWriter{ResponseWriter: w, e: e}, r)
+	})
+}
+
+type expiresWriter struct {
+	http.ResponseWriter
+	e    *config.Expires
+	done bool
+}
+
+func (w *expiresWriter) WriteHeader(code int) {
+	if !w.done {
+		w.done = true
+		if addHeaderStatuses[code] {
+			hd := w.Header()
+			switch w.e.Mode {
+			case "duration":
+				hd.Set("Expires", time.Now().Add(w.e.Duration).UTC().Format(http.TimeFormat))
+				hd.Set("Cache-Control", fmt.Sprintf("max-age=%d", int(w.e.Duration.Seconds())))
+			case "nocache": // expires -1 等负值
+				hd.Set("Expires", time.Now().Add(w.e.Duration).UTC().Format(http.TimeFormat))
+				hd.Set("Cache-Control", "no-cache")
+			case "epoch":
+				hd.Set("Expires", "Thu, 01 Jan 1970 00:00:01 GMT")
+				hd.Set("Cache-Control", "no-cache")
+			case "max":
+				hd.Set("Expires", "Thu, 31 Dec 2037 23:55:55 GMT")
+				hd.Set("Cache-Control", "max-age=315360000")
+			}
+		}
+	}
+	w.ResponseWriter.WriteHeader(code)
+}
+
+func (w *expiresWriter) Write(b []byte) (int, error) {
+	if !w.done {
+		w.WriteHeader(http.StatusOK)
+	}
+	return w.ResponseWriter.Write(b)
+}
+
+func (w *expiresWriter) Flush() {
+	if f, ok := w.ResponseWriter.(http.Flusher); ok {
+		f.Flush()
+	}
 }
 
 // compiledMap resolves one http-level map block per request.
