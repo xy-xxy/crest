@@ -557,6 +557,9 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 		if t := durOr(loc.ProxyReadTimeout, sv.ProxyReadTimeout, i.cfg.HTTP.ProxyReadTimeout); t > 0 {
 			opts.ReadTimeout = t
 		}
+		if t := durOr(loc.ProxySendTimeout, sv.ProxySendTimeout, i.cfg.HTTP.ProxySendTimeout); t > 0 {
+			opts.SendTimeout = t
+		}
 		h, err := handler.NewProxy(loc.ProxyPass, opts, pools, i.errLog)
 		return h, nil, err
 	}

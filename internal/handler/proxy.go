@@ -1,6 +1,7 @@
 package handler
 
 import (
+	"context"
 	"io"
 	"net"
 	"net/http"
@@ -48,7 +49,21 @@ type ProxyOptions struct {
 	PassHeaders    []string          // proxy_pass_header, re-enables defaults
 	ConnectTimeout time.Duration     // 0 → 60s (proxy_connect_timeout default)
 	ReadTimeout    time.Duration     // 0 → 60s (proxy_read_timeout default)
+	SendTimeout    time.Duration     // 0 → no per-write deadline (proxy_send_timeout)
 	Keepalive      int               // idle keep-alive conns to backend; 0 → 16 default
+}
+
+// writeDeadlineConn refreshes the write deadline before each Write, giving
+// nginx's proxy_send_timeout semantics (max gap between successful writes to
+// the backend). Reads are unaffected.
+type writeDeadlineConn struct {
+	net.Conn
+	timeout time.Duration
+}
+
+func (c *writeDeadlineConn) Write(b []byte) (int, error) {
+	c.Conn.SetWriteDeadline(time.Now().Add(c.timeout))
+	return c.Conn.Write(b)
 }
 
 // defaultHiddenHeaders mirrors nginx: internal X-Accel-* plus Date/Server,
@@ -194,11 +209,20 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 	if opts.Keepalive > 0 {
 		idlePerHost = opts.Keepalive
 	}
+	dialer := &net.Dialer{Timeout: connectTimeout, KeepAlive: 30 * time.Second}
+	dialContext := dialer.DialContext
+	if opts.SendTimeout > 0 {
+		st := opts.SendTimeout
+		dialContext = func(ctx context.Context, network, addr string) (net.Conn, error) {
+			c, err := dialer.DialContext(ctx, network, addr)
+			if err != nil {
+				return nil, err
+			}
+			return &writeDeadlineConn{Conn: c, timeout: st}, nil
+		}
+	}
 	var transport http.RoundTripper = &http.Transport{
-		DialContext: (&net.Dialer{
-			Timeout:   connectTimeout,
-			KeepAlive: 30 * time.Second,
-		}).DialContext,
+		DialContext:           dialContext,
 		ResponseHeaderTimeout: readTimeout,
 		MaxIdleConns:          100,
 		MaxIdleConnsPerHost:   idlePerHost,

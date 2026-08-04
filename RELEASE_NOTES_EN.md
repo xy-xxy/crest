@@ -4,6 +4,10 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.4.3
+
+- `proxy_send_timeout` — timeout for writing the request to the backend (max gap between successful writes), inherited http < server < location. Completes the trio of nginx proxy timeouts.
+
 ## v0.4.2
 
 **nginx parity (batch 2):**

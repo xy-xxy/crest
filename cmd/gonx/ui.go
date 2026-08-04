@@ -397,129 +397,145 @@ ui:
   listen: 127.0.0.1:8899        # 管理页面地址；回环或具体本机 IP 已限制访问面
   token: change-me-please       # 访问令牌（不写则每次启动随机生成）
   open: true                    # 启动时自动打开浏览器（无桌面环境的服务器会静默跳过）
-  allow: [127.0.0.1, 192.168.0.0/16]   # IP 白名单（IP/CIDR）；仅当 listen 绑 0.0.0.0 时才需要
+  allow: [127.0.0.1, 192.168.0.0/16]   # IP 白名单（仅绑 0.0.0.0 时才需要）
 
 # ===== 进程错误日志 =====
 error_log:
   path: logs/error.log          # 路径；也可写 stderr / stdout
-  level: info                   # 级别：debug / info / warn / error
+  level: info                   # debug / info / warn / error
 
 # ===== HTTP 服务 =====
 http:
-  # 访问日志：不写此项时自动分流到 log/success.log 与 log/error.log
-  access_log: {path: logs/access.log, format: main}
-  log_formats:                  # 自定义日志格式（内置 combined 可直接用）
+  access_log: {path: logs/access.log, format: main}   # 不写则自动分流到 log/success.log 与 log/error.log
+  log_formats:
     main: '$remote_addr - [$time_local] "$request" $status $body_bytes_sent $request_time $upstream_addr'
 
-  gzip:                         # 响应压缩
+  gzip:                         # 动态压缩
     enabled: true
-    min_length: 1k              # 小于此大小不压缩
-    level: 6                    # 压缩级别 1-9
+    min_length: 1k
+    level: 6
     types: [text/css, application/javascript, application/json]
+  gzip_static: true             # 存在 &lt;文件&gt;.gz 时直接发预压缩文件
 
   limit_req_zones:              # 限速区（漏桶）
-    perip: {key: $binary_remote_addr, rate: 10r/s}   # 速率 Nr/s 或 Nr/m
+    perip: {key: $binary_remote_addr, rate: 10r/s}
   limit_conn_zones:             # 并发连接数区
-    addr: $binary_remote_addr   # 名称 → 统计维度变量
+    addr: $binary_remote_addr
   cache_paths:                  # 代理缓存区
-    apicache: cache/api         # 名称 → 磁盘目录（自动创建）
+    apicache: cache/api
 
-  maps:                         # 变量映射：按 source 的值决定 target
+  maps:                         # 变量映射
     - source: $http_upgrade
       target: $conn_upgrade
-      cases:                    # 支持精确 / ~正则 / ~*忽略大小写 / default
-        default: ""
-        websocket: upgrade
+      cases: {default: "", websocket: upgrade}
 
-  # 以下为全局默认，server / location 可就近覆盖
-  client_max_body_size: 50m     # 请求体上限，超出返回 413
+  # 以下为全局默认，server / location 就近覆盖
+  client_max_body_size: 50m
   proxy_connect_timeout: 60s    # 连接后端超时
   proxy_read_timeout: 300s      # 读后端响应超时
-  autoindex: false              # 目录列表默认关闭
+  proxy_send_timeout: 60s       # 写后端请求超时
+  limit_rate: 0                 # 响应带宽限速（0=不限）
+  autoindex: false
+  server_tokens: false          # Server 头不带版本号
+  ssl_protocols: [TLSv1.2, TLSv1.3]
 
   upstreams:                    # 负载均衡后端组
     backend:
       balancer: least_conn      # round_robin(默认) / least_conn / ip_hash
+      keepalive: 32             # 到后端的空闲长连接池
       servers:
         - {address: 127.0.0.1:8001, weight: 3, max_fails: 2, fail_timeout: 30s}
-        - {address: 127.0.0.1:8002}          # 权重默认 1
-        - {address: 127.0.0.1:8003, backup: true}   # 备用：主全挂时才启用
-        - {address: 127.0.0.1:8004, down: true}      # 手动摘除
+        - {address: 127.0.0.1:8002}
+        - {address: 127.0.0.1:8003, backup: true}
+        - {address: 127.0.0.1:8004, down: true}
 
   servers:
     # ---- 站点 1：静态站 + SPA + 反代 + HTTPS ----
-    - listen: [80, {port: 443, ssl: true, default: true}]  # 同时听 80 和 443(带SNI证书)
-      server_name: [example.com, "*.example.com"]  # 精确 / *.前缀 / 后缀.* / ~正则
-      root: /var/www/dist                          # 静态根目录
-      index: [index.html, index.htm]               # 默认首页
-      ssl_certificate: certs/example.crt           # PEM 证书（TLS 下自动启用 HTTP/2）
-      ssl_certificate_key: certs/example.key       # PEM 私钥
-      error_pages:                                 # 自定义错误页（仅拦截 gonx 自身错误）
+    - listen: [80, {port: 443, ssl: true, default: true}]
+      server_name: [example.com, "*.example.com"]
+      root: /var/www/dist
+      index: [index.html, index.htm]
+      ssl_certificate: certs/example.crt
+      ssl_certificate_key: certs/example.key
+      error_pages:
         - {codes: [500, 502, 503, 504], uri: /50x.html}
-      add_headers:                                 # 附加响应头
-        - {name: X-Frame-Options, value: SAMEORIGIN, always: true}  # always: 错误响应也加
-      access:                                      # IP 访问控制，按顺序首个命中生效
+      add_headers:
+        - {name: X-Frame-Options, value: SAMEORIGIN, always: true}
+      access:
         - {allow: 192.168.0.0/16}
-        - {allow: 127.0.0.1}
         - {deny: all}
-      rewrites:                                    # server 级重写，在 location 匹配前执行
-        - {pattern: "^/old/(.*)$", replacement: /new/$1, flag: permanent}  # last/break/redirect/permanent
+      rewrites:
+        - {pattern: "^/old/(.*)$", replacement: /new/$1, flag: permanent}
 
       locations:
-        - path: /                                  # 前缀匹配（默认）
-          try_files: [$uri, $uri/, /index.html]    # 依次探测，末项兜底（SPA 常用）
+        - path: /
+          try_files: [$uri, $uri/, /index.html]
 
         - path: /api/
-          proxy_pass: http://backend               # 反代到 upstream；尾部 / 会替换匹配前缀
-          proxy_set_header:                        # 传给后端的请求头
+          proxy_pass: http://backend
+          proxy_set_header:
             Host: $host
             X-Real-IP: $remote_addr
             X-Forwarded-For: $proxy_add_x_forwarded_for
             X-Forwarded-Proto: $scheme
-          proxy_cookie_path:                       # 改写后端 Set-Cookie 的 Path
+          proxy_cookie_path:
             - {from: /api/, to: /}
-          proxy_cache: apicache                    # 启用缓存区
-          proxy_cache_valid:                       # 缓存有效期
+          proxy_redirect:
+            - {from: 'http://backend/', to: /api/}
+          proxy_hide_header: [X-Powered-By]
+          proxy_pass_header: [Server]
+          proxy_cache: apicache
+          proxy_cache_valid:
             - {codes: [200, 301], time: 10m}
-            - {any: true, time: 1m}                # any: 其余状态码
-          limit_req: {zone: perip, burst: 20, nodelay: true}  # 限速
-          limit_conn: {zone: addr, max: 10}        # 并发上限
-          client_max_body_size: 200m               # 覆盖全局
+            - {any: true, time: 1m}
+          proxy_connect_timeout: 5s
+          proxy_read_timeout: 120s
+          proxy_send_timeout: 30s
+          limit_req: {zone: perip, burst: 20, nodelay: true}
+          limit_conn: {zone: addr, max: 10}
+          client_max_body_size: 200m
 
-        - path: /ws/
-          proxy_pass: http://127.0.0.1:9001        # WebSocket 的 Upgrade 头自动处理
+        - path: /download/
+          alias: /var/www/files/
+          autoindex: true
+          limit_rate: 500k              # 下载限速 500KB/s
+          limit_rate_after: 1m          # 前 1MB 全速
+          gzip: {enabled: false}
+          expires: 7d
 
-        - path: /assets/
-          alias: /var/www/static/                  # 替换前缀映射（区别于 root 拼接全路径）
-          autoindex: true                          # 开启目录列表
+        - path: /img/
+          root: /var/www
+          valid_referers: [none, server_names, "*.trusted.com"]   # 防盗链
+          expires: max
 
         - path: /admin/
-          auth_basic: {realm: "Admin Area", user_file: certs/htpasswd}  # 基础认证
+          auth_basic: {realm: "Admin Area", user_file: certs/htpasswd}
 
         - path: /ping
-          match: exact                             # 精确匹配（对应 nginx =）
-          return: {code: 200, body: "pong $scheme"}  # 直接响应，支持变量
+          match: exact
+          return: {code: 200, body: "pong $scheme"}
 
-        - path: "@fallback"                        # 命名 location，仅由 try_files 跳转进入
+        - path: "@fallback"                # 命名 location
           proxy_pass: http://backend
 
-    # ---- 站点 2：正则匹配示例 ----
+    # ---- 站点 2：正则匹配 ----
     - listen: [8080]
-      server_name: ['~^api\d+\.example\.com$']     # 正则虚拟主机名
+      server_name: ['~^api\d+\.example\.com$']
       locations:
-        - path: '\.(jpg|png|gif)$'                 # 正则路径
-          match: regex_i                           # 忽略大小写(对应 nginx ~*)；regex 对应 ~
+        - path: '\.(jpg|png|gif)$'
+          match: regex_i
           root: /var/www/images
+          expires: 30d
 
 # ===== L4 代理（TCP / UDP）=====
 stream:
-  upstreams:                    # stream 也支持负载均衡
+  upstreams:
     tcp_pool:
       servers:
         - {address: 127.0.0.1:5432}
   servers:
-    - {listen: 15432, proxy_pass: tcp_pool, proxy_timeout: 1h}          # TCP 转发
-    - {listen: 19100, udp: true, proxy_pass: 192.168.1.100:19100, proxy_responses: 1, proxy_timeout: 10s}  # UDP 转发</pre>
+    - {listen: 15432, proxy_pass: tcp_pool, proxy_timeout: 1h}
+    - {listen: 19100, udp: true, proxy_pass: 192.168.1.100:19100, proxy_responses: 1, proxy_timeout: 10s}</pre>
       <div class="note">这是覆盖全部指令的参考配置，直接复制后按实际情况修改路径/域名/后端地址即可；不需要的段落删掉。保存为 gonx.yml 后运行 gonx -c gonx.yml；先用 gonx -t -c gonx.yml 校验（占位路径会提示不存在，属正常）。</div>
       </details>
 
@@ -580,7 +596,7 @@ stream:
       <tr><td>auth_basic</td><td>基础认证；htpasswd 支持 bcrypt/apr1/SHA1/明文</td><td>{realm: Admin, user_file: htpasswd}</td></tr>
       <tr><td>autoindex</td><td>目录列表开关</td><td>autoindex: true</td></tr>
       <tr><td>client_max_body_size</td><td>请求体上限，超出 413</td><td>200m</td></tr>
-      <tr><td>proxy_connect_timeout / proxy_read_timeout</td><td>连接/读后端超时</td><td>proxy_read_timeout: 300s</td></tr>
+      <tr><td>proxy_connect_timeout / proxy_read_timeout / proxy_send_timeout</td><td>连接/读/写后端超时</td><td>proxy_read_timeout: 300s</td></tr>
       <tr><td>gzip</td><td>同 http 层，可局部覆盖</td><td>{enabled: false}</td></tr></table></details>
 
       <details><summary>upstreams（负载均衡）</summary>

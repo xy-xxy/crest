@@ -54,6 +54,7 @@ type yamlCommon struct {
 	ClientMaxBodySize   string       `yaml:"client_max_body_size"`
 	ProxyConnectTimeout string       `yaml:"proxy_connect_timeout"`
 	ProxyReadTimeout    string       `yaml:"proxy_read_timeout"`
+	ProxySendTimeout    string       `yaml:"proxy_send_timeout"`
 	Expires             string       `yaml:"expires"`
 	LimitRate           string       `yaml:"limit_rate"`
 	LimitRateAfter      string       `yaml:"limit_rate_after"`
@@ -648,7 +649,7 @@ func applyCommonToHTTP(h *HTTP, c *yamlCommon) error {
 	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic); err != nil {
 		return err
 	}
-	return c.sizeAndTimeouts(&h.ClientMaxBody, &h.ProxyConnectTimeout, &h.ProxyReadTimeout)
+	return c.sizeAndTimeouts(&h.ClientMaxBody, &h.ProxyConnectTimeout, &h.ProxyReadTimeout, &h.ProxySendTimeout)
 }
 
 func applyCommonToServer(s *Server, c *yamlCommon) error {
@@ -668,7 +669,7 @@ func applyCommonToServer(s *Server, c *yamlCommon) error {
 	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic); err != nil {
 		return err
 	}
-	return c.sizeAndTimeouts(&s.ClientMaxBody, &s.ProxyConnectTimeout, &s.ProxyReadTimeout)
+	return c.sizeAndTimeouts(&s.ClientMaxBody, &s.ProxyConnectTimeout, &s.ProxyReadTimeout, &s.ProxySendTimeout)
 }
 
 func applyCommonToLocation(loc *Location, c *yamlCommon) error {
@@ -693,7 +694,7 @@ func applyCommonToLocation(loc *Location, c *yamlCommon) error {
 	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic); err != nil {
 		return err
 	}
-	return c.sizeAndTimeouts(&loc.ClientMaxBody, &loc.ProxyConnectTimeout, &loc.ProxyReadTimeout)
+	return c.sizeAndTimeouts(&loc.ClientMaxBody, &loc.ProxyConnectTimeout, &loc.ProxyReadTimeout, &loc.ProxySendTimeout)
 }
 
 // rateAndStatic converts limit_rate / limit_rate_after / gzip_static.
@@ -773,7 +774,7 @@ func (c *yamlCommon) auth() *AuthBasic {
 	return &AuthBasic{Realm: c.Auth.Realm, UserFile: c.Auth.UserFile}
 }
 
-func (c *yamlCommon) sizeAndTimeouts(body **int64, connectT, readT **time.Duration) error {
+func (c *yamlCommon) sizeAndTimeouts(body **int64, connectT, readT, sendT **time.Duration) error {
 	if c.ClientMaxBodySize != "" {
 		n, err := parseSizeStr(c.ClientMaxBodySize)
 		if err != nil {
@@ -781,19 +782,23 @@ func (c *yamlCommon) sizeAndTimeouts(body **int64, connectT, readT **time.Durati
 		}
 		*body = &n
 	}
-	if c.ProxyConnectTimeout != "" {
-		t, err := parseNginxTime(c.ProxyConnectTimeout)
-		if err != nil {
-			return fmt.Errorf("proxy_connect_timeout: %w", err)
+	for _, tc := range []struct {
+		name string
+		val  string
+		dst  **time.Duration
+	}{
+		{"proxy_connect_timeout", c.ProxyConnectTimeout, connectT},
+		{"proxy_read_timeout", c.ProxyReadTimeout, readT},
+		{"proxy_send_timeout", c.ProxySendTimeout, sendT},
+	} {
+		if tc.val == "" {
+			continue
 		}
-		*connectT = &t
-	}
-	if c.ProxyReadTimeout != "" {
-		t, err := parseNginxTime(c.ProxyReadTimeout)
+		t, err := parseNginxTime(tc.val)
 		if err != nil {
-			return fmt.Errorf("proxy_read_timeout: %w", err)
+			return fmt.Errorf("%s: %w", tc.name, err)
 		}
-		*readT = &t
+		*tc.dst = &t
 	}
 	return nil
 }

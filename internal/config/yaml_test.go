@@ -236,3 +236,35 @@ http:
 		t.Errorf("legacy address form broken: %+v", l)
 	}
 }
+
+func TestYAMLProxySendTimeout(t *testing.T) {
+	src := `
+http:
+  proxy_send_timeout: 45s
+  upstreams:
+    pool:
+      keepalive: 512
+      servers:
+        - address: 127.0.0.1:9090
+  servers:
+    - listen: [8080]
+      locations:
+        - path: /api/
+          proxy_pass: http://pool
+          proxy_send_timeout: 90s
+`
+	cfg, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.ProxySendTimeout == nil || *cfg.HTTP.ProxySendTimeout != 45*time.Second {
+		t.Errorf("http proxy_send_timeout: %v", cfg.HTTP.ProxySendTimeout)
+	}
+	loc := cfg.HTTP.Servers[0].Locations[0]
+	if loc.ProxySendTimeout == nil || *loc.ProxySendTimeout != 90*time.Second {
+		t.Errorf("location proxy_send_timeout: %v", loc.ProxySendTimeout)
+	}
+	if cfg.HTTP.Upstreams["pool"].Keepalive != 512 {
+		t.Errorf("upstream keepalive: %d", cfg.HTTP.Upstreams["pool"].Keepalive)
+	}
+}

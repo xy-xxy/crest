@@ -66,6 +66,7 @@ type HTTP struct {
 	Maps                []MapVar
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	ProxySendTimeout    *time.Duration
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -173,6 +174,7 @@ type Server struct {
 	Autoindex           *bool
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	ProxySendTimeout    *time.Duration
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -213,6 +215,7 @@ type Location struct {
 	Autoindex           *bool
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
+	ProxySendTimeout    *time.Duration
 	Expires             *Expires
 	ProxyRedirects      []ProxyRedirect
 	HideHeaders         []string
@@ -570,15 +573,18 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.Autoindex = b
-		case "proxy_connect_timeout", "proxy_read_timeout":
+		case "proxy_connect_timeout", "proxy_read_timeout", "proxy_send_timeout":
 			t, err := parseDirectiveTime(d)
 			if err != nil {
 				return nil, err
 			}
-			if d.Name == "proxy_connect_timeout" {
+			switch d.Name {
+			case "proxy_connect_timeout":
 				h.ProxyConnectTimeout = t
-			} else {
+			case "proxy_read_timeout":
 				h.ProxyReadTimeout = t
+			default:
+				h.ProxySendTimeout = t
 			}
 		case "map":
 			m, err := parseMap(d)
@@ -621,7 +627,7 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.GzipStatic = b
-		case "proxy_send_timeout", "default_type", "sendfile", "keepalive_timeout",
+		case "default_type", "sendfile", "keepalive_timeout",
 			"tcp_nopush", "tcp_nodelay", "types_hash_max_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
@@ -760,15 +766,18 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, err
 			}
 			s.Autoindex = b
-		case "proxy_connect_timeout", "proxy_read_timeout":
+		case "proxy_connect_timeout", "proxy_read_timeout", "proxy_send_timeout":
 			t, err := parseDirectiveTime(d)
 			if err != nil {
 				return nil, err
 			}
-			if d.Name == "proxy_connect_timeout" {
+			switch d.Name {
+			case "proxy_connect_timeout":
 				s.ProxyConnectTimeout = t
-			} else {
+			case "proxy_read_timeout":
 				s.ProxyReadTimeout = t
+			default:
+				s.ProxySendTimeout = t
 			}
 		case "expires":
 			e, err := parseExpiresDirective(d)
@@ -810,7 +819,7 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, errDirective(d, "needs at least one referer rule")
 			}
 			s.ValidReferers = append(s.ValidReferers, d.Args...)
-		case "proxy_send_timeout", "keepalive_timeout", "tcp_nopush", "tcp_nodelay",
+		case "keepalive_timeout", "tcp_nopush", "tcp_nodelay",
 			"sendfile", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
@@ -956,15 +965,18 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 				return nil, err
 			}
 			loc.Autoindex = b
-		case "proxy_connect_timeout", "proxy_read_timeout":
+		case "proxy_connect_timeout", "proxy_read_timeout", "proxy_send_timeout":
 			t, err := parseDirectiveTime(d)
 			if err != nil {
 				return nil, err
 			}
-			if d.Name == "proxy_connect_timeout" {
+			switch d.Name {
+			case "proxy_connect_timeout":
 				loc.ProxyConnectTimeout = t
-			} else {
+			case "proxy_read_timeout":
 				loc.ProxyReadTimeout = t
+			default:
+				loc.ProxySendTimeout = t
 			}
 		case "expires":
 			e, err := parseExpiresDirective(d)
@@ -1017,7 +1029,7 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 				return nil, errDirective(d, "needs at least one referer rule")
 			}
 			loc.ValidReferers = append(loc.ValidReferers, d.Args...)
-		case "proxy_send_timeout", "proxy_buffering", "proxy_http_version", "chunked_transfer_encoding",
+		case "proxy_buffering", "proxy_http_version", "chunked_transfer_encoding",
 			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
