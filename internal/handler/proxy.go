@@ -2,6 +2,7 @@ package handler
 
 import (
 	"context"
+	"crypto/tls"
 	"io"
 	"net"
 	"net/http"
@@ -50,7 +51,8 @@ type ProxyOptions struct {
 	ConnectTimeout time.Duration     // 0 → 60s (proxy_connect_timeout default)
 	ReadTimeout    time.Duration     // 0 → 60s (proxy_read_timeout default)
 	SendTimeout    time.Duration     // 0 → no per-write deadline (proxy_send_timeout)
-	Keepalive      int               // idle keep-alive conns to backend; 0 → 16 default
+	Keepalive      int               // idle keep-alive conns to backend; 0 → 100 default
+	SSLVerify      bool              // proxy_ssl_verify: verify the upstream cert (default off, like nginx)
 }
 
 // writeDeadlineConn refreshes the write deadline before each Write, giving
@@ -205,7 +207,10 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 		return nil
 	}
 
-	idlePerHost := 16
+	// A too-small idle pool forces a new backend TCP connection per request
+	// under load (connect/close syscall storm, huge tail latency). Default to
+	// a generous 100 like nginx setups usually configure; keepalive overrides.
+	idlePerHost := 100
 	if opts.Keepalive > 0 {
 		idlePerHost = opts.Keepalive
 	}
@@ -221,13 +226,20 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 			return &writeDeadlineConn{Conn: c, timeout: st}, nil
 		}
 	}
-	var transport http.RoundTripper = &http.Transport{
+	ht := &http.Transport{
 		DialContext:           dialContext,
 		ResponseHeaderTimeout: readTimeout,
-		MaxIdleConns:          100,
+		MaxIdleConns:          idlePerHost * 4,
 		MaxIdleConnsPerHost:   idlePerHost,
 		IdleConnTimeout:       90 * time.Second,
+		ForceAttemptHTTP2:     false, // upstream is plain HTTP/1.1; skip h2 probing
 	}
+	// proxy_ssl_verify defaults off (matching nginx): don't verify the upstream
+	// TLS cert, so a self-signed HTTPS backend works out of the box.
+	if target.Scheme == "https" && !opts.SSLVerify {
+		ht.TLSClientConfig = &tls.Config{InsecureSkipVerify: true}
+	}
+	var transport http.RoundTripper = ht
 	if pool != nil {
 		transport = &retryTransport{pool: pool, base: transport, errlog: errlog}
 	}

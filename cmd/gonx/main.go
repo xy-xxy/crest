@@ -10,6 +10,7 @@ import (
 	"io"
 	"net"
 	"net/http"
+	_ "net/http/pprof"
 	"net/netip"
 	"os"
 	"os/signal"
@@ -24,10 +25,13 @@ import (
 	"gonx/internal/server"
 )
 
-const version = "0.4.3"
+const version = "0.4.6"
 
 func main() {
 	server.Version = version
+	if addr := os.Getenv("GONX_PPROF"); addr != "" {
+		go http.ListenAndServe(addr, nil) // net/http/pprof registers on DefaultServeMux
+	}
 	confPath := flag.String("c", "gonx.conf", "path to configuration file")
 	testOnly := flag.Bool("t", false, "test configuration and exit")
 	showVersion := flag.Bool("v", false, "print version and exit")

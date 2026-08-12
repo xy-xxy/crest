@@ -268,3 +268,58 @@ http:
 		t.Errorf("upstream keepalive: %d", cfg.HTTP.Upstreams["pool"].Keepalive)
 	}
 }
+
+func TestYAMLProxySSLVerify(t *testing.T) {
+	src := `
+http:
+  proxy_ssl_verify: false
+  servers:
+    - listen: [8080]
+      locations:
+        - path: /a/
+          proxy_pass: https://backend
+        - path: /b/
+          proxy_pass: https://backend
+          proxy_ssl_verify: true
+`
+	cfg, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if cfg.HTTP.ProxySSLVerify == nil || *cfg.HTTP.ProxySSLVerify != false {
+		t.Errorf("http proxy_ssl_verify: %v", cfg.HTTP.ProxySSLVerify)
+	}
+	locB := cfg.HTTP.Servers[0].Locations[1]
+	if locB.ProxySSLVerify == nil || *locB.ProxySSLVerify != true {
+		t.Errorf("location proxy_ssl_verify override: %v", locB.ProxySSLVerify)
+	}
+}
+
+func TestYAMLRewritesSingleOrList(t *testing.T) {
+	src := `
+http:
+  servers:
+    - listen: [9006]
+      locations:
+        - path: /single/
+          rewrites: {pattern: "^/single/(.*)$", replacement: "http://$host:9022/$1", flag: redirect}
+        - path: /list/
+          rewrites:
+            - {pattern: "^/list/(.*)$", replacement: "https://$host:9010/$1", flag: redirect}
+            - {pattern: "^/list2/(.*)$", replacement: "http://1.2.3.4:8800/$1", flag: permanent}
+`
+	cfg, err := LoadYAML([]byte(src))
+	if err != nil {
+		t.Fatal(err)
+	}
+	locs := cfg.HTTP.Servers[0].Locations
+	if len(locs[0].Rewrites) != 1 || locs[0].Rewrites[0].Flag != "redirect" {
+		t.Errorf("single-map rewrite wrong: %+v", locs[0].Rewrites)
+	}
+	if locs[0].Rewrites[0].Replacement != "http://$host:9022/$1" {
+		t.Errorf("single replacement wrong: %q", locs[0].Rewrites[0].Replacement)
+	}
+	if len(locs[1].Rewrites) != 2 || locs[1].Rewrites[1].Flag != "permanent" {
+		t.Errorf("list rewrite wrong: %+v", locs[1].Rewrites)
+	}
+}

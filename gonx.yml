@@ -20,7 +20,21 @@ http:
   proxy_read_timeout: 300s      # 读后端响应超时
   proxy_send_timeout: 60s       # 写后端请求超时
 
-  servers:
+  servers:    # api.deepseek.com
+    - listen: ["48772 ssl"]
+      server_name: [api.deepseek.com]
+      index: [index.html, index.htm]
+      ssl_certificate: cert/localhost.crt
+      ssl_certificate_key: cert/localhost.key
+      locations:
+        - path: /
+          proxy_pass: https://api.deepseek.com
+          proxy_set_header:
+            Host: api.deepseek.com
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+            X-Forwarded-Proto: $scheme
+
     # 前端 + 三个反向代理
     - listen: [9999, "9443 ssl"]
       server_name: [myApp]
@@ -38,6 +52,10 @@ http:
           root: D:/Tools/nginx-1.26.0/dist
           try_files: [$uri, $uri/, /index.html]
 
+        - path: /screenv3
+          root: D:/Tools/nginx-1.26.0/screenv3
+          try_files: [$uri, $uri/, /index.html]
+
         - path: /prod-api/
           proxy_pass: http://localhost:19999/
           proxy_set_header:
@@ -46,6 +64,16 @@ http:
             X-Forwarded-For: $proxy_add_x_forwarded_for
           proxy_cookie_path:
             - {from: /prod-api/, to: /}
+          client_max_body_size: 200m
+
+        - path: /screenv3/prod-api/
+          proxy_pass: http://localhost:19999/
+          proxy_set_header:
+            Host: $host
+            X-Real-IP: $remote_addr
+            X-Forwarded-For: $proxy_add_x_forwarded_for
+          proxy_cookie_path:
+            - {from: /screenv3/prod-api/, to: /}
           client_max_body_size: 200m
 
         - path: /tduck-api/

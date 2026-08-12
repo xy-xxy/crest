@@ -67,6 +67,7 @@ type HTTP struct {
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
+	ProxySSLVerify      *bool
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -175,6 +176,7 @@ type Server struct {
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
+	ProxySSLVerify      *bool
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -216,6 +218,7 @@ type Location struct {
 	ProxyConnectTimeout *time.Duration
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
+	ProxySSLVerify      *bool
 	Expires             *Expires
 	ProxyRedirects      []ProxyRedirect
 	HideHeaders         []string
@@ -627,6 +630,12 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.GzipStatic = b
+		case "proxy_ssl_verify":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			h.ProxySSLVerify = b
 		case "default_type", "sendfile", "keepalive_timeout",
 			"tcp_nopush", "tcp_nodelay", "types_hash_max_size":
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -814,6 +823,12 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, err
 			}
 			s.GzipStatic = b
+		case "proxy_ssl_verify":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			s.ProxySSLVerify = b
 		case "valid_referers":
 			if len(d.Args) == 0 {
 				return nil, errDirective(d, "needs at least one referer rule")
@@ -1024,6 +1039,12 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 				return nil, err
 			}
 			loc.GzipStatic = b
+		case "proxy_ssl_verify":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.ProxySSLVerify = b
 		case "valid_referers":
 			if len(d.Args) == 0 {
 				return nil, errDirective(d, "needs at least one referer rule")

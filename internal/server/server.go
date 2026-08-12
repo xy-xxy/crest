@@ -560,6 +560,8 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 		if t := durOr(loc.ProxySendTimeout, sv.ProxySendTimeout, i.cfg.HTTP.ProxySendTimeout); t > 0 {
 			opts.SendTimeout = t
 		}
+		// proxy_ssl_verify: default off (like nginx); nearest scope wins
+		opts.SSLVerify = boolOr(loc.ProxySSLVerify, sv.ProxySSLVerify, i.cfg.HTTP.ProxySSLVerify)
 		h, err := handler.NewProxy(loc.ProxyPass, opts, pools, i.errLog)
 		return h, nil, err
 	}

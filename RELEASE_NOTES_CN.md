@@ -2,6 +2,22 @@
 
 本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
 
+## v0.4.6
+
+- `rewrites` —— 现在既接受单条规则的 map 写法 `rewrites: {pattern: ..., replacement: ..., flag: redirect}`，也接受多条规则的列表写法 `rewrites: [{...}, {...}]`。此前只收列表，单条也得写成列表，容易踩坑。注意：`replacement` 里含 `:` 的 URL（如 `http://$host:9022/...`）在 YAML 流式 `{...}` 中必须加引号。
+
+## v0.4.5
+
+- `proxy_ssl_verify` —— 反代到 HTTPS 上游时是否校验上游证书。**默认 off（对齐 nginx）**：反代自签证书的 HTTPS 后端（如内网两级反代）开箱即用，不再因证书校验失败返回 502。想强制校验可显式 `proxy_ssl_verify: on`（http/server/location 就近覆盖）。
+
+## v0.4.4
+
+性能修复：
+
+- **到后端的空闲连接池默认值 16 → 100**。压测发现旧默认值在中高并发下严重不足：每请求被迫新建/关闭到后端的 TCP 连接（connect/close 系统调用风暴 + TIME_WAIT 堆积），导致吞吐腰斩、长尾延迟飙到秒级。修复后同等压测吞吐翻倍、p100 长尾从 ~2900ms 降到 ~40ms。超高并发场景仍建议用 upstream `keepalive` 显式匹配并发数（不宜盲目配过大）。
+- 反代到后端时不再探测 HTTP/2（`ForceAttemptHTTP2: false`），后端为明文 HTTP/1.1 时省去无谓开销。
+- 新增诊断特性：环境变量 `GONX_PPROF=127.0.0.1:6060` 启动可开启 Go pprof（默认关闭），方便压测排查。
+
 ## v0.4.3
 
 - `proxy_send_timeout` —— 写后端请求的超时（两次写操作之间的最大间隔），http/server/location 就近覆盖。补齐 nginx 三个 proxy 超时的最后一个。

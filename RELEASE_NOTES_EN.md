@@ -4,6 +4,22 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.4.6
+
+- `rewrites` — now accepts both a single-rule mapping `rewrites: {pattern: ..., replacement: ..., flag: redirect}` and a multi-rule list `rewrites: [{...}, {...}]`. Previously only a list was accepted, so a single rule still had to be written as a list. Note: a `replacement` URL containing `:` (e.g. `http://$host:9022/...`) must be quoted inside a YAML flow `{...}` mapping.
+
+## v0.4.5
+
+- `proxy_ssl_verify` — whether to verify the upstream cert when proxying to an HTTPS backend. **Defaults off (matching nginx)**: proxying to a self-signed HTTPS backend (e.g. an internal two-tier proxy) now works out of the box instead of returning 502 on cert verification failure. Set `proxy_ssl_verify: on` to enforce verification (http/server/location, nearest wins).
+
+## v0.4.4
+
+Performance fix:
+
+- **Backend idle connection pool default raised 16 → 100.** Load testing showed the old default starved mid/high concurrency: each request was forced to open/close a fresh backend TCP connection (connect/close syscall storm + TIME_WAIT buildup), halving throughput and pushing tail latency into the seconds. After the fix, the same load doubles throughput and drops p100 tail from ~2900ms to ~40ms. Very high concurrency should still set an explicit upstream `keepalive` matching the load (but not excessively large).
+- Reverse proxy no longer probes for HTTP/2 (`ForceAttemptHTTP2: false`) — saves overhead when the backend is plain HTTP/1.1.
+- New diagnostic: set `GONX_PPROF=127.0.0.1:6060` to enable Go pprof (off by default) for load-test profiling.
+
 ## v0.4.3
 
 - `proxy_send_timeout` — timeout for writing the request to the backend (max gap between successful writes), inherited http < server < location. Completes the trio of nginx proxy timeouts.

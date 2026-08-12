@@ -59,6 +59,7 @@ type yamlCommon struct {
 	LimitRate           string       `yaml:"limit_rate"`
 	LimitRateAfter      string       `yaml:"limit_rate_after"`
 	GzipStatic          *bool        `yaml:"gzip_static"`
+	ProxySSLVerify      *bool        `yaml:"proxy_ssl_verify"`
 }
 
 type yamlHTTP struct {
@@ -138,7 +139,7 @@ type yamlServer struct {
 	AccessLog     *yamlAccessLog   `yaml:"access_log"`
 	SSLCert       string           `yaml:"ssl_certificate"`
 	SSLKey        string           `yaml:"ssl_certificate_key"`
-	Rewrites      []yamlRewrite    `yaml:"rewrites"`
+	Rewrites      yamlRewriteList  `yaml:"rewrites"`
 	ProxyCache    string           `yaml:"proxy_cache"`
 	CacheValid    []yamlCacheValid `yaml:"proxy_cache_valid"`
 	ErrorPages    []yamlErrorPage  `yaml:"error_pages"`
@@ -204,6 +205,28 @@ type yamlRewrite struct {
 	Flag        string `yaml:"flag"`
 }
 
+// yamlRewriteList accepts either a single rewrite mapping or a list of them,
+// so `rewrites: {pattern: ..., replacement: ...}` and `rewrites: [{...}, {...}]`
+// both work (a single rule is the common case).
+type yamlRewriteList []yamlRewrite
+
+func (rl *yamlRewriteList) UnmarshalYAML(node *yaml.Node) error {
+	if node.Kind == yaml.MappingNode {
+		var one yamlRewrite
+		if err := node.Decode(&one); err != nil {
+			return err
+		}
+		*rl = yamlRewriteList{one}
+		return nil
+	}
+	var list []yamlRewrite
+	if err := node.Decode(&list); err != nil {
+		return err
+	}
+	*rl = list
+	return nil
+}
+
 type yamlCacheValid struct {
 	Codes []int  `yaml:"codes"` // empty → nginx default (200,301,302); [-1] via "any: true"
 	Any   bool   `yaml:"any"`
@@ -235,7 +258,7 @@ type yamlLocation struct {
 	ProxySetHead  map[string]string   `yaml:"proxy_set_header"`
 	ProxyCookie   []yamlCookiePath    `yaml:"proxy_cookie_path"`
 	Return        *yamlReturn         `yaml:"return"`
-	Rewrites      []yamlRewrite       `yaml:"rewrites"`
+	Rewrites      yamlRewriteList     `yaml:"rewrites"`
 	TryFiles      []string            `yaml:"try_files"`
 	ProxyCache    string              `yaml:"proxy_cache"`
 	CacheValid    []yamlCacheValid    `yaml:"proxy_cache_valid"`
@@ -646,7 +669,7 @@ func applyCommonToHTTP(h *HTTP, c *yamlCommon) error {
 	if h.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic); err != nil {
+	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic, &h.ProxySSLVerify); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&h.ClientMaxBody, &h.ProxyConnectTimeout, &h.ProxyReadTimeout, &h.ProxySendTimeout)
@@ -666,7 +689,7 @@ func applyCommonToServer(s *Server, c *yamlCommon) error {
 	if s.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic); err != nil {
+	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic, &s.ProxySSLVerify); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&s.ClientMaxBody, &s.ProxyConnectTimeout, &s.ProxyReadTimeout, &s.ProxySendTimeout)
@@ -691,14 +714,14 @@ func applyCommonToLocation(loc *Location, c *yamlCommon) error {
 	if loc.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic); err != nil {
+	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic, &loc.ProxySSLVerify); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&loc.ClientMaxBody, &loc.ProxyConnectTimeout, &loc.ProxyReadTimeout, &loc.ProxySendTimeout)
 }
 
 // rateAndStatic converts limit_rate / limit_rate_after / gzip_static.
-func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic **bool) error {
+func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic, sslVerify **bool) error {
 	if c.LimitRate != "" {
 		n, err := parseSizeStr(c.LimitRate)
 		if err != nil {
@@ -714,6 +737,7 @@ func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic **bool) error {
 		*after = &n
 	}
 	*gzstatic = c.GzipStatic
+	*sslVerify = c.ProxySSLVerify
 	return nil
 }
 
