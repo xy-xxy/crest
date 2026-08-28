@@ -89,6 +89,31 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 		io.WriteString(w, text)
 	}))
 
+	mux.HandleFunc("/api/logs/clear", auth(func(w http.ResponseWriter, r *http.Request) {
+		if r.Method != http.MethodPost {
+			http.Error(w, "method not allowed", http.StatusMethodNotAllowed)
+			return
+		}
+		name := r.URL.Query().Get("name")
+		switch name {
+		case "success", "error", "console":
+		default:
+			http.Error(w, "unknown log", http.StatusBadRequest)
+			return
+		}
+		if ru.opts.LogDir == "" {
+			http.Error(w, "log directory disabled", http.StatusNotFound)
+			return
+		}
+		// 写入方一直以 O_APPEND 持有该文件，原地截断即可重置：
+		// 下一次写入自然落到偏移 0，无需关闭/重开，也不会留下空洞。
+		if err := os.Truncate(filepath.Join(ru.opts.LogDir, name+".log"), 0); err != nil && !os.IsNotExist(err) {
+			http.Error(w, err.Error(), http.StatusInternalServerError)
+			return
+		}
+		io.WriteString(w, "已清空 "+name+".log")
+	}))
+
 	mux.HandleFunc("/api/config", auth(func(w http.ResponseWriter, r *http.Request) {
 		switch r.Method {
 		case http.MethodGet:
@@ -120,7 +145,14 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 				return
 			}
 			if old, err := os.ReadFile(ru.confPath); err == nil {
-				os.WriteFile(ru.confPath+".bak", old, 0644)
+				// The backup is a full copy of the config, which typically
+				// carries ui.token — mirror the original's mode rather than
+				// creating a world-readable 0644 copy beside a 0600 original.
+				mode := os.FileMode(0600)
+				if fi, serr := os.Stat(ru.confPath); serr == nil {
+					mode = fi.Mode().Perm()
+				}
+				os.WriteFile(ru.confPath+".bak", old, mode)
 			}
 			if err := os.WriteFile(ru.confPath, body, 0644); err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
@@ -329,6 +361,7 @@ pre { background: var(--bg); border: 1px solid var(--border); border-radius: 8px
 .msg.ok { color: var(--accent); } .msg.err { color: var(--danger); white-space: pre-wrap; }
 .msg.warn { color: var(--warn); }
 label.auto { font-size: 13px; color: var(--ink-2); margin-left: auto; user-select: none; }
+.tabs .clear-log { margin-left: 10px; }
 .row { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
 code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
 </style>
@@ -375,7 +408,9 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
       <button class="on" data-log="success" onclick="pickLog(this)">success.log</button>
       <button data-log="error" onclick="pickLog(this)">error.log</button>
       <button data-log="console" onclick="pickLog(this)">console.log</button>
+      <span class="msg" id="log-msg"></span>
       <label class="auto"><input type="checkbox" id="auto" checked> 自动刷新</label>
+      <button class="danger clear-log" onclick="clearLog(this)">清空</button>
     </div>
     <div class="logbox">
       <div class="gutter"><div id="loglnums">1</div></div>
@@ -750,6 +785,20 @@ function lineNums(txt) {
 function logSync() {
   const pre = document.getElementById('log');
   document.getElementById('loglnums').style.transform = 'translateY(' + (-pre.scrollTop) + 'px)';
+}
+
+async function clearLog(btn) {
+  const name = curLog, m = document.getElementById('log-msg');
+  if (!confirm('确定清空 ' + name + '.log？内容不可恢复。')) return;
+  btn.disabled = true; m.textContent = '…'; m.className = 'msg';
+  try {
+    const r = await fetch('/api/logs/clear?name=' + encodeURIComponent(name), {method: 'POST'});
+    m.textContent = (await r.text()).trim();
+    m.className = 'msg ' + (r.ok ? 'ok' : 'err');
+    if (r.ok) refreshLog(true);
+  } catch (e) { m.textContent = '请求失败'; m.className = 'msg err'; }
+  btn.disabled = false;
+  setTimeout(() => { if (m.className !== 'msg err') m.textContent = ''; }, 4000);
 }
 
 function pickLog(btn) {

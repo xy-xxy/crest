@@ -41,6 +41,12 @@ func WrapCache(h http.Handler, c *cache.Cache, valids []CacheValid) http.Handler
 		}
 		rec := &cacheRecorder{ResponseWriter: w}
 		h.ServeHTTP(rec, r)
+		// Only a GET may populate the entry: a HEAD carries no body, and
+		// storing it under the shared key would answer later GETs with an
+		// empty 200. HEAD still reads from an entry a GET created.
+		if r.Method != http.MethodGet {
+			return
+		}
 		if ttl := cacheTTL(rec.status, rec.header, valids); ttl > 0 && !rec.overflow && rec.wrote {
 			c.Put(key, rec.status, rec.header, rec.buf.Bytes(), ttl)
 		}

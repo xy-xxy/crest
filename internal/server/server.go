@@ -146,7 +146,12 @@ func NewWithOptions(cfg *config.Config, opts Options) (*Instance, error) {
 	}
 	var errLog *logging.ErrorLog
 	var err error
-	if errPath == "" && opts.Console != nil {
+	// Console is a tee of stderr and log/console.log, so an unset error_log
+	// and an explicit "stderr" both belong there: writing to the bare stderr
+	// of a detached process (a Windows service, a double-clicked exe) throws
+	// the diagnostics away, and console.log is documented as the home for
+	// runtime errors.
+	if isStderrPath(errPath) && opts.Console != nil {
 		errLog = logging.OpenErrorWriter(opts.Console, level)
 	} else if errLog, err = logging.OpenError(errPath, level); err != nil {
 		return nil, err
@@ -163,6 +168,16 @@ func NewWithOptions(cfg *config.Config, opts Options) (*Instance, error) {
 		}
 	}
 	return inst, nil
+}
+
+// isStderrPath reports the error_log destinations that the console tee
+// already covers.
+func isStderrPath(p string) bool {
+	switch p {
+	case "", "stderr", "/dev/stderr":
+		return true
+	}
+	return false
 }
 
 func (inst *Instance) setupHTTP(h *config.HTTP) (*Instance, error) {
@@ -214,12 +229,6 @@ func (inst *Instance) setupHTTP(h *config.HTTP) (*Instance, error) {
 		}
 		inst.caches[name] = c
 	}
-	compiledMaps, err := compileMaps(h.Maps)
-	if err != nil {
-		return nil, err
-	}
-	inst.maps = compiledMaps
-
 	groups := map[string]*hostGroup{}
 	sslAddr := map[string]bool{}
 	for _, sv := range h.Servers {

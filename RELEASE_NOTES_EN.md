@@ -4,6 +4,92 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.4.7
+
+Added:
+
+- **A "clear" button in the admin console's log panel** — empties the log
+  currently on screen (`success.log` / `error.log` / `console.log`) behind a
+  confirmation. The writers hold the file in `O_APPEND` mode, so it truncates
+  in place: no reopen, no sparse gap. Backed by
+  `POST /api/logs/clear?name=<success|error|console>`, guarded by the same
+  token and `ui.allow` list as the rest of the console.
+
+Security fixes:
+
+- **The `.bak` the admin console writes when saving a config was
+  world-readable.** The backup is a full copy of the config, which normally
+  carries `ui.token`. The control file `.ctl` has always been written 0600,
+  but the backup was hard-coded to 0644, so any local user could read the
+  admin token out of `gonx.yml.bak`. The backup now inherits the original
+  config file's permission bits, falling back to 0600.
+- **`..\` escaped the configured root on Windows.** A backslash in the URI is
+  an ordinary character to `path.Clean`, but Windows `filepath.Join` treats it
+  as a real separator and resolves the `..`, so a request like
+  `/..%5C..%5Cgonx.yml` could read files outside the root — including the
+  config file holding the admin token. Linux was unaffected (a backslash is a
+  legal filename character there). The mapping now normalises backslashes to
+  URI separators before cleaning and re-checks that the result is still inside
+  the base directory; both guards apply on every platform. Browsers already
+  rewrite `\` to `/` per the WHATWG URL spec, so normal traffic is unchanged.
+
+Fixes:
+
+- **WebSockets through an `upstream` pool always returned 502.** When the
+  target is an upstream, the response body is wrapped so the backend returns
+  to the pool once the connection closes (least_conn's active count depends on
+  it) — but the wrapper exposed only `io.ReadCloser`, dropping `Write`. Go's
+  reverse proxy type-asserts a 101 response body to `io.ReadWriteCloser` to
+  build the bidirectional tunnel, so the assertion failed with `101 switching
+  protocols response with non-writable body` and the request became a 502. A
+  direct `proxy_pass http://host:port` was unaffected; only
+  `proxy_pass http://<upstream>` triggered it. The wrapper now forwards
+  `Write`, keeping the release behaviour intact.
+- **`error_page` handed the intercepted response's headers to the error
+  page.** The 502's own `Content-Type: text/plain` overrode the error page's
+  real type, so a custom HTML page **rendered as source** in the browser, and
+  the internal interception marker `X-Gonx-Internal` leaked to the client. The
+  staged headers are now cleared on interception, so the error page starts as
+  a fresh response the way nginx builds it.
+- **A server with only proxy locations and no `root` answered 500 instead of
+  404 for unmatched requests.** That shape is common (a port hosting nothing
+  but a few `proxy_pass` locations), and every stray `/favicon.ico` or scanner
+  probe of `/` was recorded as a server error — unlike nginx, which falls back
+  to its built-in default root and 404s, and noisy enough to pollute
+  `error.log` and monitoring. It now returns 404 and logs one warn-level line
+  (filtered out at the default error level).
+- **A HEAD request poisoned `proxy_cache`.** HEAD shares the cache key with
+  GET but carries no body, so its empty response was stored and every later
+  GET answered `200` with an **empty body**. Only a GET may populate an entry
+  now; HEAD still reads from one a GET created.
+- **`rewrite` to an absolute URL dropped the original query string.** nginx
+  appends the previous request arguments to the replacement unless it ends in
+  `?`; gonx did that only for local replacements and redirected to an absolute
+  URL verbatim, so `rewrite ^/x/(.*)$ http://host/$1 redirect;` lost the
+  client's `?a=1` entirely. A trailing `?` no longer leaves a bare `?` dangling
+  in the `Location` header either.
+- **WebSockets always returned 502 on any route with `add_header` or `expires`.**
+  The response writers for those two directives (`headerAdder` / `expiresWriter`)
+  did not forward `Hijack()`, so the reverse proxy could not take over the
+  underlying connection to complete the 101 upgrade; Go's proxy failed with
+  `can't switch protocols using non-Hijacker ResponseWriter type` and returned
+  `502 Bad Gateway`. Because `add_header` / `expires` are inherited from the
+  http / server scope, a single outer directive broke every WebSocket under that
+  server while the location itself looked perfectly fine — a hard failure to
+  track down. Both writers now pass Hijack through, matching `gzip` /
+  `proxy_cache` / `limit_rate` and the other wrappers.
+- **`error_log: {path: stderr}` silently swallowed every runtime error.**
+  Errors only reached `log/console.log` when `error_log` was unset; an explicit
+  `stderr` wrote to the process's raw stderr instead — which nobody reads when
+  gonx runs as a Windows service, a double-clicked exe, or any detached process,
+  so diagnostics like `proxy error for ...` were lost and a 502 left nothing but
+  a bare status code in the access log. `stderr` (and `/dev/stderr`) now go
+  through the console tee like the unset case, reaching both the terminal and
+  `log/console.log`, matching the documented role of console.log as the home for
+  process messages and runtime errors.
+- Added a WebSocket upgrade regression test covering a bare proxy plus the
+  `add_header` / `expires` / `gzip` / `error_page` combinations.
+
 ## v0.4.6
 
 - `rewrites` — now accepts both a single-rule mapping `rewrites: {pattern: ..., replacement: ..., flag: redirect}` and a multi-rule list `rewrites: [{...}, {...}]`. Previously only a list was accepted, so a single rule still had to be written as a list. Note: a `replacement` URL containing `:` (e.g. `http://$host:9022/...`) must be quoted inside a YAML flow `{...}` mapping.

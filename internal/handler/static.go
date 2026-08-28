@@ -37,8 +37,17 @@ func (s *Static) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	fsPath := s.FilePath(r.URL.Path)
 	if fsPath == "" {
-		s.ErrLog.Logf(logging.LevelError, `no "root" configured for request %q`, r.URL.Path)
-		http.Error(w, "500 Internal Server Error", http.StatusInternalServerError)
+		// No root/alias in scope — the shape of a proxy-only server whose
+		// unmatched requests fall through here. nginx would look under its
+		// built-in default root and 404; answering 500 turned every stray
+		// /favicon.ico into a server error. Warn (filtered out at the
+		// default error level) and 404.
+		if s.Root == "" && s.Alias == "" {
+			s.ErrLog.Logf(logging.LevelWarn, `no "root" configured for request %q`, r.URL.Path)
+		} else {
+			s.ErrLog.Logf(logging.LevelWarn, "request %q maps outside the configured root, denied", r.URL.Path)
+		}
+		http.NotFound(w, r)
 		return
 	}
 
@@ -115,18 +124,38 @@ func (s *Static) serveListing(w http.ResponseWriter, r *http.Request, dir string
 }
 
 // FilePath maps a URI to a filesystem path using root/alias semantics.
-// Clean neutralizes ".." traversal before the path touches the filesystem.
-// Returns "" when neither root nor alias is configured.
+// A backslash counts as a URI separator before cleaning: path.Clean leaves
+// "..\\" alone (it is one opaque element to it), but Windows filepath.Join
+// then honours it as a parent hop and the request escapes the configured
+// root. Browsers already normalise "\\" to "/" per the WHATWG URL spec, so
+// only a hand-crafted "%5C" request is affected. withinBase re-checks the
+// mapped path as a second line of defence.
+// Returns "" when neither root nor alias is configured, and when the mapped
+// path would land outside the base directory.
 func (s *Static) FilePath(uriPath string) string {
-	upath := path.Clean("/" + uriPath)
+	upath := path.Clean("/" + strings.ReplaceAll(uriPath, `\`, "/"))
+	base, rest := s.Root, upath
 	if s.Alias != "" {
-		rest := strings.TrimPrefix(upath, strings.TrimSuffix(s.Prefix, "/"))
-		return filepath.Join(s.Alias, filepath.FromSlash(rest))
+		base = s.Alias
+		rest = strings.TrimPrefix(upath, strings.TrimSuffix(s.Prefix, "/"))
 	}
-	if s.Root == "" {
+	if base == "" {
 		return ""
 	}
-	return filepath.Join(s.Root, filepath.FromSlash(upath))
+	full := filepath.Join(base, filepath.FromSlash(rest))
+	if !withinBase(base, full) {
+		return ""
+	}
+	return full
+}
+
+// withinBase reports whether p is base itself or sits inside it.
+func withinBase(base, p string) bool {
+	rel, err := filepath.Rel(base, p)
+	if err != nil {
+		return false
+	}
+	return rel == "." || (rel != ".." && !strings.HasPrefix(rel, ".."+string(filepath.Separator)))
 }
 
 func (s *Static) serveFile(w http.ResponseWriter, r *http.Request, fsPath string, fi os.FileInfo) {

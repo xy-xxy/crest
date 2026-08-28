@@ -8,10 +8,13 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
 	"path/filepath"
 	"strings"
 	"testing"
 	"time"
+
+	"gonx/internal/handler"
 )
 
 func freeAddr(t *testing.T) string {
@@ -240,5 +243,53 @@ http {
 	resp2.Body.Close()
 	if resp2.StatusCode != 200 {
 		t.Errorf("small body: %d, want 200", resp2.StatusCode)
+	}
+}
+
+// TestErrorPageStartsWithCleanHeaders makes sure an intercepted response does
+// not hand its headers to the error page: the 502's text/plain Content-Type
+// used to survive and render a custom HTML page as source, and the internal
+// interception marker leaked to the client.
+func TestErrorPageStartsWithCleanHeaders(t *testing.T) {
+	dir := t.TempDir()
+	page := "<html><body><h1>Service Unavailable</h1></body></html>"
+	if err := os.WriteFile(filepath.Join(dir, "50x.html"), []byte(page), 0644); err != nil {
+		t.Fatal(err)
+	}
+	// port 1 never accepts, so gonx generates the 502 itself
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        root "%s";
+        error_page 502 /50x.html;
+        location /api/ { proxy_pass http://127.0.0.1:1/; }
+        location = /50x.html { }
+    }
+}`, filepath.ToSlash(dir))
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	resp, err := ts.Client().Get(ts.URL + "/api/x")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer resp.Body.Close()
+	body, _ := io.ReadAll(resp.Body)
+
+	if resp.StatusCode != http.StatusBadGateway {
+		t.Errorf("status = %d, want 502", resp.StatusCode)
+	}
+	if string(body) != page {
+		t.Errorf("body = %q, want the error page", body)
+	}
+	if ct := resp.Header.Get("Content-Type"); !strings.HasPrefix(ct, "text/html") {
+		t.Errorf("Content-Type = %q, want text/html", ct)
+	}
+	if v := resp.Header.Get(handler.InternalErrorHeader); v != "" {
+		t.Errorf("internal marker leaked to the client: %q", v)
 	}
 }

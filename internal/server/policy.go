@@ -1,7 +1,10 @@
 package server
 
 import (
+	"bufio"
+	"errors"
 	"fmt"
+	"net"
 	"net/http"
 	"net/netip"
 	"regexp"
@@ -82,6 +85,15 @@ func (w *headerAdder) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack passthrough keeps Upgrade (websocket) proxying working through an
+// add_header wrapper.
+func (w *headerAdder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, errors.New("hijacking not supported")
 }
 
 type accessRule struct {
@@ -217,6 +229,15 @@ func (w *expiresWriter) Flush() {
 	if f, ok := w.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
+}
+
+// Hijack passthrough keeps Upgrade (websocket) proxying working through an
+// expires wrapper.
+func (w *expiresWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
+	if hj, ok := w.ResponseWriter.(http.Hijacker); ok {
+		return hj.Hijack()
+	}
+	return nil, nil, errors.New("hijacking not supported")
 }
 
 // refererCheck holds compiled valid_referers rules for one location/server.

@@ -328,3 +328,43 @@ http {
 		t.Errorf("TLS 1.2 should be accepted: %v", err)
 	}
 }
+
+// TestRewriteExternalRedirectArgs pins nginx's argument handling on an
+// absolute replacement: the previous query string is appended unless the
+// replacement ends in "?". Only local replacements used to get this, so an
+// external redirect silently dropped the client's query.
+func TestRewriteExternalRedirectArgs(t *testing.T) {
+	conf := `
+http {
+    access_log off;
+    error_log stderr crit;
+    server {
+        listen 8080;
+        location /plain/ { rewrite ^/plain/(.*)$ http://ex.com/$1 redirect; }
+        location /withq/ { rewrite ^/withq/(.*)$ http://ex.com/$1?fixed=1 redirect; }
+        location /dropq/ { rewrite ^/dropq/(.*)$ http://ex.com/$1? redirect; }
+    }
+}`
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+	client := &http.Client{CheckRedirect: func(*http.Request, []*http.Request) error {
+		return http.ErrUseLastResponse
+	}}
+	tests := []struct{ path, want string }{
+		{"/plain/a/b?x=1&y=2", "http://ex.com/a/b?x=1&y=2"},
+		{"/plain/a/b", "http://ex.com/a/b"},
+		{"/withq/a?x=1", "http://ex.com/a?fixed=1&x=1"},
+		{"/dropq/a?x=1", "http://ex.com/a"},
+	}
+	for _, tc := range tests {
+		resp, err := client.Get(ts.URL + tc.path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		resp.Body.Close()
+		if got := resp.Header.Get("Location"); got != tc.want {
+			t.Errorf("%s: Location = %q, want %q", tc.path, got, tc.want)
+		}
+	}
+}

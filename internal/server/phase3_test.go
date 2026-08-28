@@ -142,3 +142,47 @@ http {
 		t.Errorf("no-store responses must not be cached: %d backend hits", hits)
 	}
 }
+
+// TestProxyCacheHeadDoesNotPoison guards the cache key against a HEAD, which
+// shares the key with GET but carries no body: storing it answered every
+// later GET with an empty 200.
+func TestProxyCacheHeadDoesNotPoison(t *testing.T) {
+	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		fmt.Fprint(w, "REAL-BODY")
+	}))
+	defer backend.Close()
+	bu, _ := url.Parse(backend.URL)
+	conf := fmt.Sprintf(`
+http {
+    access_log off;
+    error_log stderr crit;
+    proxy_cache_path "%s" keys_zone=zh:10m;
+    server {
+        listen 8080;
+        location /api/ {
+            proxy_pass http://%s;
+            proxy_cache zh;
+            proxy_cache_valid 200 10m;
+        }
+    }
+}`, filepath.ToSlash(t.TempDir()), bu.Host)
+
+	inst := buildInstance(t, conf)
+	ts := httptest.NewServer(inst.Addrs[0])
+	defer ts.Close()
+
+	req, _ := http.NewRequest(http.MethodHead, ts.URL+"/api/x", nil)
+	resp, err := ts.Client().Do(req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+
+	if code, body := get(t, ts, "/api/x", ""); code != 200 || body != "REAL-BODY" {
+		t.Errorf("GET after HEAD = %d %q, want 200 %q", code, body, "REAL-BODY")
+	}
+	// the GET populated the entry, so a second GET is a HIT
+	if code, body := get(t, ts, "/api/x", ""); code != 200 || body != "REAL-BODY" {
+		t.Errorf("cached GET = %d %q", code, body)
+	}
+}

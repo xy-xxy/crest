@@ -78,6 +78,15 @@ func (w *errorPageWriter) WriteHeader(code int) {
 		fromGonx := !w.proxyRoute || w.Header().Get(handler.InternalErrorHeader) != ""
 		if uri := w.pages[code]; uri != "" && fromGonx {
 			w.intercepted = code
+			// The intercepted response never reaches the client, so neither
+			// should the headers it staged: its Content-Type would mislabel
+			// the error page (an HTML page served as the 502's text/plain
+			// renders as source), and the internal marker would leak. nginx
+			// builds the error page as a fresh response; do the same.
+			h := w.Header()
+			for k := range h {
+				delete(h, k)
+			}
 			return
 		}
 	}

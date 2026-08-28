@@ -56,26 +56,27 @@ func applyRewrites(rules []*rewriteRule, w http.ResponseWriter, r *http.Request)
 			return vars.Value(r, name)
 		})
 		external := strings.HasPrefix(raw, "http://") || strings.HasPrefix(raw, "https://")
-		target := raw
-		if !external {
-			// a trailing "?" means "do not append the previous args"
-			dropArgs := strings.HasSuffix(raw, "?")
-			trimmed := strings.TrimSuffix(raw, "?")
-			path, args := trimmed, ""
-			if i := strings.IndexByte(trimmed, '?'); i >= 0 {
-				path, args = trimmed[:i], trimmed[i+1:]
-				if !dropArgs && args != "" && r.URL.RawQuery != "" {
-					args += "&" + r.URL.RawQuery
-				}
-			} else if !dropArgs {
-				args = r.URL.RawQuery
+		// nginx appends the previous request arguments to the replacement;
+		// a trailing "?" suppresses that. This applies to an absolute
+		// replacement (an external redirect) just as it does to a local one.
+		dropArgs := strings.HasSuffix(raw, "?")
+		trimmed := strings.TrimSuffix(raw, "?")
+		path, args := trimmed, ""
+		if i := strings.IndexByte(trimmed, '?'); i >= 0 {
+			path, args = trimmed[:i], trimmed[i+1:]
+			if !dropArgs && args != "" && r.URL.RawQuery != "" {
+				args += "&" + r.URL.RawQuery
 			}
+		} else if !dropArgs {
+			args = r.URL.RawQuery
+		}
+		target := path
+		if args != "" {
+			target += "?" + args
+		}
+		if !external {
 			r.URL.Path, r.URL.RawQuery = path, args
 			changed = true
-			target = path
-			if args != "" {
-				target += "?" + args
-			}
 		}
 		if external || rule.flag == "redirect" || rule.flag == "permanent" {
 			code := http.StatusFound

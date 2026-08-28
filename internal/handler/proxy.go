@@ -3,6 +3,7 @@ package handler
 import (
 	"context"
 	"crypto/tls"
+	"errors"
 	"io"
 	"net"
 	"net/http"
@@ -314,6 +315,19 @@ type releaseOnClose struct {
 func (b *releaseOnClose) Close() error {
 	b.once.Do(b.release)
 	return b.ReadCloser.Close()
+}
+
+// Write forwards to the underlying body so a 101 response stays an
+// io.ReadWriteCloser: ReverseProxy type-asserts that to build the upgrade
+// tunnel, and a read-only wrapper turns every pooled WebSocket into a 502.
+// Keeping the wrapper in place is what releases the backend when the
+// tunnel closes.
+func (b *releaseOnClose) Write(p []byte) (int, error) {
+	w, ok := b.ReadCloser.(io.Writer)
+	if !ok {
+		return 0, errors.New("upstream response body is not writable")
+	}
+	return w.Write(p)
 }
 
 // rewriteCookiePath applies proxy_cookie_path prefix replacements to one
