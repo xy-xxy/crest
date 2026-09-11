@@ -2,6 +2,16 @@
 
 本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
 
+## v0.5.0
+
+新增：
+
+- **`proxy_buffering` / `proxy_buffers` / `proxy_max_temp_file_size`** —— 补齐 nginx 最后一块实质性缺失的机制：缓冲后端响应，让慢客户端不再占住上游连接。此前 gonx 只做直通转发，一个慢速客户端下载大文件会把后端连接一直占着（实测 4MB 响应、12MB/s 客户端，后端被占用 ~150ms）；开启缓冲后同样场景后端占用降到 **1–9ms**。默认开启，与 nginx 一致，http/server/location 就近覆盖。
+
+  两处刻意与 nginx 不同：**（1）有数据立即转发**，不等缓冲区填满，所以 SSE、长轮询等增量响应在缓冲开启状态下延迟不变（nginx 这种场景必须手动关缓冲）；**（2）转存临时文件在独立 goroutine 上异步进行**，不占用上游的关键路径 —— 早期同步写盘的版本实测和不缓冲一样慢（50–183ms），改异步后才降到个位数毫秒。
+
+  `proxy_buffers: {count, size}` 设定单个响应的内存预算（默认 8×32k），超出异步落盘；`proxy_max_temp_file_size: 0` 表示只用内存、不落盘（超出即退化为直通背压）；`proxy_buffering: false` 完全关闭。`proxy_buffer_size` / `proxy_busy_buffers_size` / `proxy_request_buffering` / `proxy_temp_file_write_size` 在 gonx 中无对应机制，静默接受不再告警。
+
 ## v0.4.7
 
 新增：

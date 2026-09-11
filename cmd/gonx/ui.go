@@ -469,6 +469,9 @@ http:
   proxy_connect_timeout: 60s    # 连接后端超时
   proxy_read_timeout: 300s      # 读后端响应超时
   proxy_send_timeout: 60s       # 写后端请求超时
+  proxy_buffering: true         # 缓冲后端响应（默认开）；关掉则直通不缓冲
+  proxy_buffers: {count: 8, size: 32k}   # 每个响应的内存预算，超出转存临时文件
+  proxy_max_temp_file_size: 1g  # 临时文件上限；0 表示只用内存、不落盘
   limit_rate: 0                 # 响应带宽限速（0=不限）
   autoindex: false
   server_tokens: false          # Server 头不带版本号
@@ -632,6 +635,9 @@ stream:
       <tr><td>autoindex</td><td>目录列表开关</td><td>autoindex: true</td></tr>
       <tr><td>client_max_body_size</td><td>请求体上限，超出 413</td><td>200m</td></tr>
       <tr><td>proxy_connect_timeout / proxy_read_timeout / proxy_send_timeout</td><td>连接/读/写后端超时</td><td>proxy_read_timeout: 300s</td></tr>
+      <tr><td>proxy_buffering</td><td>缓冲后端响应，慢客户端不再占住后端连接（默认开，同 nginx）。SSE/流式响应不受影响：有数据即转发，不等缓冲区填满</td><td>proxy_buffering: false</td></tr>
+      <tr><td>proxy_buffers</td><td>单个响应的内存预算 = count × size，超出部分异步转存临时文件</td><td>{count: 4, size: 256k}</td></tr>
+      <tr><td>proxy_max_temp_file_size</td><td>临时文件上限；0 = 不落盘（超出内存即退化为直通背压）</td><td>1g</td></tr>
       <tr><td>gzip</td><td>同 http 层，可局部覆盖</td><td>{enabled: false}</td></tr></table></details>
 
       <details><summary>upstreams（负载均衡）</summary>

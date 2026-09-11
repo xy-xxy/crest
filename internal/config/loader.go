@@ -68,6 +68,9 @@ type HTTP struct {
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
 	ProxySSLVerify      *bool
+	ProxyBuffering      *bool  // nginx proxy_buffering; nil = inherit, default on
+	ProxyBufferMem      *int64 // proxy_buffers count*size: bytes held in memory
+	ProxyMaxTempFile    *int64 // proxy_max_temp_file_size; 0 disables the spill
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -177,6 +180,9 @@ type Server struct {
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
 	ProxySSLVerify      *bool
+	ProxyBuffering      *bool  // nginx proxy_buffering; nil = inherit, default on
+	ProxyBufferMem      *int64 // proxy_buffers count*size: bytes held in memory
+	ProxyMaxTempFile    *int64 // proxy_max_temp_file_size; 0 disables the spill
 	Expires             *Expires
 	ServerTokens        *bool
 	SSLProtocols        []string
@@ -219,6 +225,9 @@ type Location struct {
 	ProxyReadTimeout    *time.Duration
 	ProxySendTimeout    *time.Duration
 	ProxySSLVerify      *bool
+	ProxyBuffering      *bool  // nginx proxy_buffering; nil = inherit, default on
+	ProxyBufferMem      *int64 // proxy_buffers count*size: bytes held in memory
+	ProxyMaxTempFile    *int64 // proxy_max_temp_file_size; 0 disables the spill
 	Expires             *Expires
 	ProxyRedirects      []ProxyRedirect
 	HideHeaders         []string
@@ -636,8 +645,31 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.ProxySSLVerify = b
+		case "proxy_buffering":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			h.ProxyBuffering = b
+		case "proxy_buffers":
+			n, err := parseProxyBuffers(d)
+			if err != nil {
+				return nil, err
+			}
+			h.ProxyBufferMem = &n
+		case "proxy_max_temp_file_size":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			h.ProxyMaxTempFile = &n
 		case "default_type", "sendfile", "keepalive_timeout",
-			"tcp_nopush", "tcp_nodelay", "types_hash_max_size":
+			"tcp_nopush", "tcp_nodelay", "types_hash_max_size",
+			"proxy_request_buffering", "proxy_buffer_size",
+			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
+			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
+			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
 			cfg.warnf(d, "unknown directive %q in http block (ignored)", d.Name)
@@ -834,8 +866,31 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, errDirective(d, "needs at least one referer rule")
 			}
 			s.ValidReferers = append(s.ValidReferers, d.Args...)
+		case "proxy_buffering":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			s.ProxyBuffering = b
+		case "proxy_buffers":
+			n, err := parseProxyBuffers(d)
+			if err != nil {
+				return nil, err
+			}
+			s.ProxyBufferMem = &n
+		case "proxy_max_temp_file_size":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			s.ProxyMaxTempFile = &n
 		case "keepalive_timeout", "tcp_nopush", "tcp_nodelay",
-			"sendfile", "client_body_buffer_size":
+			"sendfile", "client_body_buffer_size",
+			"proxy_request_buffering", "proxy_buffer_size",
+			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
+			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
+			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
 			cfg.warnf(d, "unknown directive %q in server block (ignored)", d.Name)
@@ -1050,8 +1105,31 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 				return nil, errDirective(d, "needs at least one referer rule")
 			}
 			loc.ValidReferers = append(loc.ValidReferers, d.Args...)
-		case "proxy_buffering", "proxy_http_version", "chunked_transfer_encoding",
-			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size":
+		case "proxy_buffering":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.ProxyBuffering = b
+		case "proxy_buffers":
+			n, err := parseProxyBuffers(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.ProxyBufferMem = &n
+		case "proxy_max_temp_file_size":
+			n, err := parseBodySize(d)
+			if err != nil {
+				return nil, err
+			}
+			loc.ProxyMaxTempFile = &n
+		case "proxy_http_version", "chunked_transfer_encoding",
+			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size",
+			"proxy_request_buffering", "proxy_buffer_size",
+			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
+			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
+			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
 		default:
 			cfg.warnf(d, "unknown directive %q in location block (ignored)", d.Name)
@@ -1374,6 +1452,23 @@ func parseBodySize(d *Directive) (int64, error) {
 }
 
 // parseSizeStr parses an nginx size literal (200, 512k, 200m, 1g).
+// parseProxyBuffers reads nginx's "proxy_buffers <count> <size>" and returns
+// the total memory budget for one response.
+func parseProxyBuffers(d *Directive) (int64, error) {
+	if len(d.Args) != 2 {
+		return 0, errDirective(d, "needs a buffer count and size, e.g. \"4 256k\"")
+	}
+	n, err := strconv.Atoi(d.Args[0])
+	if err != nil || n <= 0 {
+		return 0, errDirective(d, fmt.Sprintf("invalid buffer count %q", d.Args[0]))
+	}
+	size, err := parseSizeStr(d.Args[1])
+	if err != nil {
+		return 0, errDirective(d, fmt.Sprintf("invalid buffer size %q", d.Args[1]))
+	}
+	return int64(n) * size, nil
+}
+
 func parseSizeStr(s string) (int64, error) {
 	mult := int64(1)
 	num := s

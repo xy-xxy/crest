@@ -60,6 +60,9 @@ type yamlCommon struct {
 	LimitRateAfter      string       `yaml:"limit_rate_after"`
 	GzipStatic          *bool        `yaml:"gzip_static"`
 	ProxySSLVerify      *bool        `yaml:"proxy_ssl_verify"`
+	ProxyBuffering      *bool        `yaml:"proxy_buffering"`
+	ProxyBuffers        *yamlBuffers `yaml:"proxy_buffers"`
+	ProxyMaxTempFile    string       `yaml:"proxy_max_temp_file_size"`
 }
 
 type yamlHTTP struct {
@@ -80,6 +83,13 @@ type yamlAccessLog struct {
 	Path   string `yaml:"path"`
 	Format string `yaml:"format"`
 	Off    bool   `yaml:"off"`
+}
+
+// yamlBuffers is proxy_buffers: count * size is the in-memory budget for one
+// buffered response.
+type yamlBuffers struct {
+	Count int    `yaml:"count"`
+	Size  string `yaml:"size"`
 }
 
 type yamlGzip struct {
@@ -669,7 +679,7 @@ func applyCommonToHTTP(h *HTTP, c *yamlCommon) error {
 	if h.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic, &h.ProxySSLVerify); err != nil {
+	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic, &h.ProxySSLVerify, &h.ProxyBuffering, &h.ProxyBufferMem, &h.ProxyMaxTempFile); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&h.ClientMaxBody, &h.ProxyConnectTimeout, &h.ProxyReadTimeout, &h.ProxySendTimeout)
@@ -689,7 +699,7 @@ func applyCommonToServer(s *Server, c *yamlCommon) error {
 	if s.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic, &s.ProxySSLVerify); err != nil {
+	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic, &s.ProxySSLVerify, &s.ProxyBuffering, &s.ProxyBufferMem, &s.ProxyMaxTempFile); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&s.ClientMaxBody, &s.ProxyConnectTimeout, &s.ProxyReadTimeout, &s.ProxySendTimeout)
@@ -714,14 +724,15 @@ func applyCommonToLocation(loc *Location, c *yamlCommon) error {
 	if loc.Expires, err = c.expires(); err != nil {
 		return err
 	}
-	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic, &loc.ProxySSLVerify); err != nil {
+	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic, &loc.ProxySSLVerify, &loc.ProxyBuffering, &loc.ProxyBufferMem, &loc.ProxyMaxTempFile); err != nil {
 		return err
 	}
 	return c.sizeAndTimeouts(&loc.ClientMaxBody, &loc.ProxyConnectTimeout, &loc.ProxyReadTimeout, &loc.ProxySendTimeout)
 }
 
 // rateAndStatic converts limit_rate / limit_rate_after / gzip_static.
-func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic, sslVerify **bool) error {
+func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic, sslVerify **bool,
+	buffering **bool, bufferMem, maxTemp **int64) error {
 	if c.LimitRate != "" {
 		n, err := parseSizeStr(c.LimitRate)
 		if err != nil {
@@ -738,6 +749,25 @@ func (c *yamlCommon) rateAndStatic(rate, after **int64, gzstatic, sslVerify **bo
 	}
 	*gzstatic = c.GzipStatic
 	*sslVerify = c.ProxySSLVerify
+	*buffering = c.ProxyBuffering
+	if c.ProxyBuffers != nil {
+		if c.ProxyBuffers.Count <= 0 {
+			return fmt.Errorf("proxy_buffers: count must be positive")
+		}
+		size, err := parseSizeStr(c.ProxyBuffers.Size)
+		if err != nil {
+			return fmt.Errorf("proxy_buffers.size: %w", err)
+		}
+		total := int64(c.ProxyBuffers.Count) * size
+		*bufferMem = &total
+	}
+	if c.ProxyMaxTempFile != "" {
+		n, err := parseSizeStr(c.ProxyMaxTempFile)
+		if err != nil {
+			return fmt.Errorf("proxy_max_temp_file_size: %w", err)
+		}
+		*maxTemp = &n
+	}
 	return nil
 }
 

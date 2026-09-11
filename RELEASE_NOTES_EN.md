@@ -4,6 +4,34 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.5.0
+
+Added:
+
+- **`proxy_buffering` / `proxy_buffers` / `proxy_max_temp_file_size`** — the
+  last substantial mechanism gonx was missing next to nginx: buffering the
+  upstream response so a slow client no longer holds the backend connection
+  open. gonx streamed straight through before, so a slow download pinned the
+  upstream for its whole duration (measured: a 4MB response to a 12MB/s client
+  held the backend ~150ms); with buffering the same case releases it in
+  **1–9ms**. On by default, matching nginx, inherited http < server < location.
+
+  Two deliberate differences from nginx: **(1)** buffered bytes are forwarded
+  as soon as they arrive rather than once a buffer fills, so SSE and other
+  incremental responses keep their latency with buffering left on — in nginx
+  those need it switched off; **(2)** the temp file is written on its own
+  goroutine, keeping disk latency off the upstream's critical path. An earlier
+  inline-spool version measured no better than not buffering at all (50–183ms)
+  before the write moved off that path.
+
+  `proxy_buffers: {count, size}` sets the per-response memory budget (default
+  8×32k) beyond which data spools to disk; `proxy_max_temp_file_size: 0` keeps
+  the buffer in memory only, falling back to back-pressure past it; and
+  `proxy_buffering: false` streams straight through. `proxy_buffer_size`,
+  `proxy_busy_buffers_size`, `proxy_request_buffering` and
+  `proxy_temp_file_write_size` have no counterpart in gonx and are now
+  accepted silently instead of warned about.
+
 ## v0.4.7
 
 Added:

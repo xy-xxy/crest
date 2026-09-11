@@ -434,6 +434,13 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 		}
 	}
 	if loc.ProxyPass != "" {
+		// Innermost wrapper around the proxy: the upstream body is drained at
+		// full speed into the buffer, so the backend connection is released
+		// without waiting for a slow client. Everything outside (cache, gzip,
+		// add_header) then acts on the drained stream.
+		if bo, on := i.resolveBuffering(sv, loc); on {
+			hd = handler.WrapProxyBuffering(hd, bo)
+		}
 		name := loc.ProxyCache
 		if name == "" {
 			name = sv.ProxyCache
@@ -473,6 +480,43 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 	}
 	rt.handler = hd
 	return rt, nil
+}
+
+// resolveBuffering resolves proxy_buffering and its sizes with nearest-scope
+// precedence. nginx defaults it on, and so does gonx: the drain forwards data
+// as soon as it arrives, so buffering costs incremental responses nothing.
+func (i *Instance) resolveBuffering(sv *config.Server, loc *config.Location) (handler.BufferOptions, bool) {
+	h := i.cfg.HTTP
+	on := true
+	for _, v := range []*bool{loc.ProxyBuffering, sv.ProxyBuffering, h.ProxyBuffering} {
+		if v != nil {
+			on = *v
+			break
+		}
+	}
+	if !on {
+		return handler.BufferOptions{}, false
+	}
+	opts := handler.BufferOptions{ErrLog: i.errLog}
+	for _, v := range []*int64{loc.ProxyBufferMem, sv.ProxyBufferMem, h.ProxyBufferMem} {
+		if v != nil {
+			opts.MemLimit = *v
+			break
+		}
+	}
+	for _, v := range []*int64{loc.ProxyMaxTempFile, sv.ProxyMaxTempFile, h.ProxyMaxTempFile} {
+		if v != nil {
+			// proxy_max_temp_file_size 0 disables the spill; the option uses
+			// a negative value for that so 0 can mean "unset"
+			if *v == 0 {
+				opts.MaxTempFile = -1
+			} else {
+				opts.MaxTempFile = *v
+			}
+			break
+		}
+	}
+	return opts, true
 }
 
 // resolveRate returns the nearest limit_rate / limit_rate_after (bytes/sec).

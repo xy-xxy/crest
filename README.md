@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.4.7-009639)
+![Version](https://img.shields.io/badge/version-v0.5.0-009639)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
-![Tests](https://img.shields.io/badge/tests-7%20packages%20passing-brightgreen)
+![Tests](https://img.shields.io/badge/tests-8%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-009639)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.4.7**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.5.0**
 
 gonx is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -108,9 +108,9 @@ After starting, visit <http://localhost:8080/> (static page) and
 | Context | Directives |
 |---|---|
 | main | `http` `stream` (`events` / `worker_processes` etc. are accepted but ignored) |
-| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` |
-| server | `listen` (with `ssl` / `default`) `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` |
-| location | `root` `alias` `index` `proxy_pass` `return` `rewrite` `try_files` (incl. `@named`) `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `proxy_set_header` `proxy_cookie_path` `proxy_redirect` `proxy_hide_header` `proxy_pass_header` `client_max_body_size` `add_header` `allow`/`deny` `auth_basic`/`auth_basic_user_file` `autoindex` `expires` `proxy_connect_timeout`/`proxy_read_timeout` |
+| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
+| server | `listen` (with `ssl` / `default`) `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
+| location | `root` `alias` `index` `proxy_pass` `return` `rewrite` `try_files` (incl. `@named`) `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `proxy_set_header` `proxy_cookie_path` `proxy_redirect` `proxy_hide_header` `proxy_pass_header` `client_max_body_size` `add_header` `allow`/`deny` `auth_basic`/`auth_basic_user_file` `autoindex` `expires` `proxy_connect_timeout`/`proxy_read_timeout` `proxy_buffering`/`proxy_buffers`/`proxy_max_temp_file_size` |
 | upstream | `server` (with `weight=` `max_fails=` `fail_timeout=` `backup` `down`) `least_conn` `ip_hash` |
 | stream | `upstream` `server` |
 | stream server | `listen` (with `udp`) `proxy_pass` `proxy_timeout` `proxy_connect_timeout` `proxy_responses` |
@@ -225,6 +225,16 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
   `http://b/v1/` → `/v1/x`); without one it passes the original URI through;
   default `Host: $proxy_host`, and injects `X-Real-IP` / `X-Forwarded-For` /
   `X-Forwarded-Proto`
+- **proxy_buffering**: on by default, like nginx — the upstream response is
+  read at full speed into a buffer (memory up to `proxy_buffers` count × size,
+  then a temp file capped by `proxy_max_temp_file_size`) so the backend
+  connection is released without waiting for a slow client. Two deliberate
+  differences: the buffer is forwarded as soon as bytes arrive rather than
+  once a buffer fills, so SSE and other incremental responses keep their
+  latency with buffering left on; and the temp file is written on its own
+  goroutine, keeping disk latency off the upstream's critical path. Set
+  `proxy_buffering off` to stream straight through, or
+  `proxy_max_temp_file_size 0` to keep the buffer in memory only
 - **upstream**: smooth weighted round-robin (nginx's algorithm); connection
   failure fails over to the next backend and takes the failed one out for 10s
   (default `fail_timeout`)
@@ -284,6 +294,10 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
   as-is
 
 ## Limitations and roadmap
+
+A buffered response holds up to `proxy_buffers` bytes of memory per in-flight
+request, so a path serving large downloads to many clients at once should size
+it deliberately (or turn buffering off for that location).
 
 Single-process, multi-goroutine model — no master/worker. One port cannot mix ssl
 and plain. Requests with a body are not retried on upstream failure (the body may
