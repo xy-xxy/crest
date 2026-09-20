@@ -10,7 +10,7 @@ import (
 	"strings"
 	"time"
 
-	"gonx/internal/cache"
+	"crest/internal/cache"
 )
 
 // CacheValid mirrors proxy_cache_valid: which statuses to cache and for how

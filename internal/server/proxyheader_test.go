@@ -24,7 +24,7 @@ http {
         listen 8080;
         location /prod-api/ {
             proxy_set_header Host $host;
-            proxy_set_header X-Custom "from-gonx";
+            proxy_set_header X-Custom "from-crest";
             proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
             proxy_pass http://%s/;
             proxy_cookie_path /prod-api/ /;
@@ -47,7 +47,7 @@ http {
 	body := make([]byte, 256)
 	n, _ := resp.Body.Read(body)
 
-	want := "host=myapp.example custom=from-gonx"
+	want := "host=myapp.example custom=from-crest"
 	if got := string(body[:n]); got != want {
 		t.Errorf("proxy_set_header: got %q, want %q", got, want)
 	}

@@ -12,25 +12,25 @@ import (
 	"strings"
 	"time"
 
-	"gonx/internal/config"
+	"crest/internal/config"
 )
 
 // registerUI mounts the browser console and its JSON API on the control mux.
 // auth wraps handlers with token verification (header or cookie).
 func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.HandlerFunc) http.HandlerFunc) {
 	mux.HandleFunc("/ui", func(w http.ResponseWriter, r *http.Request) {
-		// first visit carries ?token= from "gonx -s ui"; move it into a cookie
+		// first visit carries ?token= from "crest -s ui"; move it into a cookie
 		if q := r.URL.Query().Get("token"); q != "" {
 			if q != token {
 				http.Error(w, "forbidden", http.StatusForbidden)
 				return
 			}
-			http.SetCookie(w, &http.Cookie{Name: "gonx_token", Value: q, Path: "/", HttpOnly: true})
+			http.SetCookie(w, &http.Cookie{Name: "crest_token", Value: q, Path: "/", HttpOnly: true})
 			http.Redirect(w, r, "/ui", http.StatusFound)
 			return
 		}
 		if !tokenOK(r, token) {
-			http.Error(w, "forbidden: open the console with \"gonx -s ui\"", http.StatusForbidden)
+			http.Error(w, "forbidden: open the console with \"crest -s ui\"", http.StatusForbidden)
 			return
 		}
 		w.Header().Set("Content-Type", "text/html; charset=utf-8")
@@ -130,7 +130,7 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 				return
 			}
 			// validate through the real loader before touching the live file
-			tmp, err := os.CreateTemp("", "gonx-*"+filepath.Ext(ru.confPath))
+			tmp, err := os.CreateTemp("", "crest-*"+filepath.Ext(ru.confPath))
 			if err != nil {
 				http.Error(w, err.Error(), http.StatusInternalServerError)
 				return
@@ -166,10 +166,10 @@ func registerUI(mux *http.ServeMux, ru *runner, token string, auth func(http.Han
 }
 
 func tokenOK(r *http.Request, token string) bool {
-	if r.Header.Get("X-Gonx-Token") == token {
+	if r.Header.Get("X-Crest-Token") == token {
 		return true
 	}
-	if c, err := r.Cookie("gonx_token"); err == nil && c.Value == token {
+	if c, err := r.Cookie("crest_token"); err == nil && c.Value == token {
 		return true
 	}
 	return false
@@ -221,7 +221,7 @@ func openBrowser(url string) {
 func openUI(confPath string) error {
 	data, err := os.ReadFile(confPath + ".ctl")
 	if err != nil {
-		return fmt.Errorf("cannot read control file %s.ctl (is gonx running with -c %s?)", confPath, confPath)
+		return fmt.Errorf("cannot read control file %s.ctl (is crest running with -c %s?)", confPath, confPath)
 	}
 	parts := strings.Fields(string(data))
 	if len(parts) != 2 {
@@ -238,7 +238,7 @@ const uiHTML = `<!DOCTYPE html>
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>gonx 控制台</title>
+<title>crest 控制台</title>
 <link rel="icon" type="image/png" href="data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAACAAAAAgCAYAAABzenr0AAACsUlEQVR4nMSXTWgTURDH/83GJpaGRqqQthZXRBR60JQWFaSNXgwWJEcPfgRz9JLeAiJG6sHjFkS8ROPRi6QHxV7StaVSscQPECo9dIvatNTWxkgaa6syDxfi5u1HGrP53fLeZOf/dmbe7DihslNowem2KI7vCaPVLaIWrBQVTC0nkc5KWN/K0VID29jbdATRLhlNTm9NHGspbK5Beh/Ap8LbBnbyoW7FNuelIq5nRAFnOmLo2hW01Tmxw+HG5q+igEsHkrafXqXVJTorTbh9Hh9CYh+O7j4I0dPG1pR8Fm++zCKljGM+v1iBALfYgLsnflux7W/3I94TQaCj29BO/pxBfDqB5wuvLWmwJOBGTwTx3oilB6rEXyVwczphaucwM3hw6lrFzpmA3gj7b1UC6OThwwMVO1fxujxoaWw2tHHqbbCY65w8OfMEqblxyH/jHGj3I7S/7x+x0rtHGJwcNhWpmwNj5+6UJdzajzxCz2K6CUaiU8HbiE4O4+GHp6bOdQVQqSkXHpcZB0auWs5uq3BDQHWuhV47zznliRXkhQz3/1wBdMlooZjzsFohyRkfVwC3CtQbrhS5ylfPe6auADvhCqC7XQuVWjXwngm9HKDGooXqfESZKFunK9cKlIQ86l6G3BBQS6WupoUumX6DUNDe1yujuHzorGUBAgY647wNipm2D7idLrYmenzs92JhFW6hEcHOY4j5L0I6GWU2FC6vqxmjH1+aCjBsx9tpw6XQ3RFO30Ju47uujWEZUj+nG3C7UO8wcg6jEKiomW/2JaSFqmPwRRXdUEtdP8lK+a8fpUzAkH+uZqOYGStFxcFmtXoxtZx0sEGRxiS7IZ/prORgUyoNinaKUIfT9a2cwBa+/VzCxNI9mtVoXKrZqEbj+VhWwv3Z81jdmKelPwEAAP//9W0em/Nyz1MAAAAASUVORK5CYII=">
 <style>
 :root {
@@ -369,7 +369,7 @@ code { font-family: var(--mono); font-size: 12px; color: var(--ink-2); }
 <body>
 <div class="wrap">
   <header>
-    <h1><span class="dot" id="dot"></span>gonx 控制台</h1>
+    <h1><span class="dot" id="dot"></span>crest 控制台</h1>
     <span class="meta" id="meta">连接中…</span>
   </header>
 
@@ -574,7 +574,7 @@ stream:
   servers:
     - {listen: 15432, proxy_pass: tcp_pool, proxy_timeout: 1h}
     - {listen: 19100, udp: true, proxy_pass: 192.168.1.100:19100, proxy_responses: 1, proxy_timeout: 10s}</pre>
-      <div class="note">这是覆盖全部指令的参考配置，直接复制后按实际情况修改路径/域名/后端地址即可；不需要的段落删掉。保存为 gonx.yml 后运行 gonx -c gonx.yml；先用 gonx -t -c gonx.yml 校验（占位路径会提示不存在，属正常）。</div>
+      <div class="note">这是覆盖全部指令的参考配置，直接复制后按实际情况修改路径/域名/后端地址即可；不需要的段落删掉。保存为 crest.yml 后运行 crest -c crest.yml；先用 crest -t -c crest.yml 校验（占位路径会提示不存在，属正常）。</div>
       </details>
 
       <details><summary>顶层结构</summary>
@@ -602,8 +602,8 @@ stream:
       <tr><td>root / index</td><td>静态根目录与默认页</td><td>root: dist</td></tr>
       <tr><td>ssl_certificate(_key)</td><td>PEM 证书 + 私钥；多 server 自动按 SNI 选择；TLS 下自动启用 HTTP/2</td><td>ssl_certificate: cert.pem</td></tr>
       <tr><td>ssl_protocols</td><td>允许的 TLS 版本（缺省最低 TLSv1.2）</td><td>[TLSv1.2, TLSv1.3]</td></tr>
-      <tr><td>server_tokens</td><td>Server 响应头：true 带版本 / false 仅 gonx</td><td>server_tokens: false</td></tr>
-      <tr><td>error_pages</td><td>自定义错误页（仅拦截 gonx 自身错误，上游错误透传）</td><td>[{codes: [502,503], uri: /50x.html}]</td></tr>
+      <tr><td>server_tokens</td><td>Server 响应头：true 带版本 / false 仅 crest</td><td>server_tokens: false</td></tr>
+      <tr><td>error_pages</td><td>自定义错误页（仅拦截 crest 自身错误，上游错误透传）</td><td>[{codes: [502,503], uri: /50x.html}]</td></tr>
       <tr><td>rewrites</td><td>server 级重写，location 匹配前执行</td><td>见 location</td></tr>
       <tr><td>locations</td><td>路由规则列表</td><td></td></tr></table></details>
 
@@ -702,7 +702,7 @@ async function refreshStatus() {
     lastStatus = s;
     document.getElementById('dot').className = 'dot';
     document.getElementById('meta').textContent =
-      'gonx/' + s.version + ' · pid ' + s.pid + ' · 运行 ' + fmtUp(s.uptime) +
+      'crest/' + s.version + ' · pid ' + s.pid + ' · 运行 ' + fmtUp(s.uptime) +
       ' · HTTP ' + s.addrs.join(', ') + (s.streams.length ? ' · L4 ' + s.streams.join(', ') : '');
     const menu = document.getElementById('dd-menu');
     const want = s.addrs.join('|');
@@ -834,7 +834,7 @@ async function act(path, btn) {
 }
 
 async function stopServer(btn) {
-  if (!confirm('确定停止 gonx 服务？停止后本页面将不可用。')) return;
+  if (!confirm('确定停止 crest 服务？停止后本页面将不可用。')) return;
   await act('/stop', btn);
 }
 

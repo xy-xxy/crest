@@ -9,7 +9,7 @@ import (
 	"os"
 	"sync"
 
-	"gonx/internal/logging"
+	"crest/internal/logging"
 )
 
 // BufferOptions sizes the proxy response buffer, mirroring
@@ -253,7 +253,7 @@ func (b *bufferedWriter) openSpillLocked() bool {
 	if b.spill != nil {
 		return true
 	}
-	f, err := os.CreateTemp(b.opts.TempDir, "gonx-proxy-*")
+	f, err := os.CreateTemp(b.opts.TempDir, "crest-proxy-*")
 	if err != nil {
 		b.logf("proxy buffer: cannot create spool file, falling back to unbuffered: %v", err)
 		return false

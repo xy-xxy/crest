@@ -8,7 +8,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gonx/internal/config"
+	"crest/internal/config"
 )
 
 func buildFromYAML(t *testing.T, yml string) *Instance {

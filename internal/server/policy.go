@@ -11,10 +11,10 @@ import (
 	"strings"
 	"time"
 
-	"gonx/internal/auth"
-	"gonx/internal/config"
-	"gonx/internal/logging"
-	"gonx/internal/vars"
+	"crest/internal/auth"
+	"crest/internal/config"
+	"crest/internal/logging"
+	"crest/internal/vars"
 )
 
 // pickHeaders implements nginx inheritance: a level with its own add_header

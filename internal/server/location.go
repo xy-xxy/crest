@@ -9,8 +9,8 @@ import (
 	"strconv"
 	"strings"
 
-	"gonx/internal/handler"
-	"gonx/internal/vars"
+	"crest/internal/handler"
+	"crest/internal/vars"
 )
 
 type route struct {

@@ -667,7 +667,7 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 			"tcp_nopush", "tcp_nodelay", "types_hash_max_size",
 			"proxy_request_buffering", "proxy_buffer_size",
 			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
-			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 缓冲族：crest 直接流式转发上游响应（首字节先于后端写完即到达
 			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
 			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -888,7 +888,7 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 			"sendfile", "client_body_buffer_size",
 			"proxy_request_buffering", "proxy_buffer_size",
 			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
-			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 缓冲族：crest 直接流式转发上游响应（首字节先于后端写完即到达
 			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
 			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted
@@ -1127,7 +1127,7 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 			"tcp_nopush", "tcp_nodelay", "keepalive_timeout", "client_body_buffer_size",
 			"proxy_request_buffering", "proxy_buffer_size",
 			"proxy_busy_buffers_size", "proxy_temp_file_write_size":
-			// 缓冲族：gonx 直接流式转发上游响应（首字节先于后端写完即到达
+			// 缓冲族：crest 直接流式转发上游响应（首字节先于后端写完即到达
 			// 客户端），没有可调的缓冲区，也无需关闭；静默接受以免真实
 			// nginx.conf 刷出无意义的告警。
 			// tuning knobs Go's HTTP stack handles on its own; silently accepted

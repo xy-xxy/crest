@@ -11,7 +11,7 @@ import (
 	"path/filepath"
 	"testing"
 
-	"gonx/internal/config"
+	"crest/internal/config"
 )
 
 func buildInstance(t *testing.T, conf string) *Instance {
@@ -57,7 +57,7 @@ func TestEndToEnd(t *testing.T) {
 	bu, _ := url.Parse(backend.URL)
 
 	dir := t.TempDir()
-	mustWrite(t, filepath.Join(dir, "index.html"), "<h1>hello gonx</h1>")
+	mustWrite(t, filepath.Join(dir, "index.html"), "<h1>hello crest</h1>")
 	mustWrite(t, filepath.Join(dir, "a.txt"), "AAA")
 	os.Mkdir(filepath.Join(dir, "sub"), 0755)
 	mustWrite(t, filepath.Join(dir, "sub", "index.html"), "sub index")
@@ -90,7 +90,7 @@ http {
 	ts := httptest.NewServer(inst.Addrs[0])
 	defer ts.Close()
 
-	if code, body := get(t, ts, "/", ""); code != 200 || body != "<h1>hello gonx</h1>" {
+	if code, body := get(t, ts, "/", ""); code != 200 || body != "<h1>hello crest</h1>" {
 		t.Errorf("index: %d %q", code, body)
 	}
 	if code, body := get(t, ts, "/a.txt", ""); code != 200 || body != "AAA" {

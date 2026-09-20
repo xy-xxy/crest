@@ -132,7 +132,7 @@ http {
 
 func TestGzip(t *testing.T) {
 	dir := t.TempDir()
-	big := strings.Repeat("gonx compresses text. ", 500)
+	big := strings.Repeat("crest compresses text. ", 500)
 	mustWrite(t, filepath.Join(dir, "big.html"), big)
 	mustWrite(t, filepath.Join(dir, "tiny.html"), "hi")
 

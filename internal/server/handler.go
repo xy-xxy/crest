@@ -7,8 +7,8 @@ import (
 	"net"
 	"net/http"
 
-	"gonx/internal/handler"
-	"gonx/internal/vars"
+	"crest/internal/handler"
+	"crest/internal/vars"
 )
 
 // respWriter captures status and byte count for access logging, and stamps
@@ -61,7 +61,7 @@ func (w *respWriter) Hijack() (net.Conn, *bufio.ReadWriter, error) {
 // errorPageWriter intercepts matching error statuses so dispatch can serve
 // the configured error_page instead. Upstream responses are left alone
 // (proxy_intercept_errors off) unless the proxy handler marked the response
-// as gonx-generated.
+// as crest-generated.
 type errorPageWriter struct {
 	http.ResponseWriter
 	pages       map[int]string
@@ -75,8 +75,8 @@ func (w *errorPageWriter) WriteHeader(code int) {
 		return
 	}
 	if !w.started {
-		fromGonx := !w.proxyRoute || w.Header().Get(handler.InternalErrorHeader) != ""
-		if uri := w.pages[code]; uri != "" && fromGonx {
+		fromCrest := !w.proxyRoute || w.Header().Get(handler.InternalErrorHeader) != ""
+		if uri := w.pages[code]; uri != "" && fromCrest {
 			w.intercepted = code
 			// The intercepted response never reaches the client, so neither
 			// should the headers it staged: its Content-Type would mislabel

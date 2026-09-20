@@ -1,30 +1,30 @@
 <table border="0" cellspacing="0" cellpadding="0"><tr>
-<td width="220" align="center" valign="middle"><img src="gonx.png" width="190" alt="gonx"></td>
-<td valign="middle"><h1>gonx</h1><b>nginx-compatible web server &amp; reverse proxy, written in Go</b></td>
+<td width="220" align="center" valign="middle"><img src="crest.png" width="190" alt="crest"></td>
+<td valign="middle"><h1>crest</h1><b>nginx-compatible web server &amp; reverse proxy, written in Go</b></td>
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.5.0-009639)
+![Version](https://img.shields.io/badge/version-v0.6.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
-![Tests](https://img.shields.io/badge/tests-8%20packages%20passing-brightgreen)
-![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-009639)
+![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
+![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.5.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.6.0**
 
-gonx is a single-binary, zero-dependency web server and reverse proxy. It runs
+crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
 built-in browser admin console — aimed at small / internal / self-hosted
 deployments.
 
 Two config formats, auto-detected by file extension:
 
-- **`.yml` / `.yaml`** — gonx's native YAML format (recommended, see `gonx.yml`)
+- **`.yml` / `.yaml`** — crest's native YAML format (recommended, see `crest.yml`)
 - **anything else (`.conf`, …)** — nginx.conf-compatible syntax (drop in your existing config)
 
 Both parse to the exact same internal structure, so they are functionally equivalent.
 
 > [!IMPORTANT]
-> gonx targets deployments where nginx.conf compatibility and a friendly admin UI
+> crest targets deployments where nginx.conf compatibility and a friendly admin UI
 > matter more than web-scale hardening. It is a single-author project with **no
 > automatic HTTPS (ACME) and no service discovery** yet — for those, use nginx,
 > Caddy or Traefik. See [Limitations and roadmap](#limitations-and-roadmap).
@@ -47,17 +47,21 @@ Both parse to the exact same internal structure, so they are functionally equiva
 ## Quick start
 
 ```sh
+# no arguments: picks up crest.yml / crest.yaml / crest.conf from the working
+# directory, then from beside the executable — this is the double-click case
+./crest
+
 # start with a YAML config
-go run ./cmd/gonx -c gonx.yml
+go run ./cmd/crest -c crest.yml
 
 # start with an nginx.conf config
-go run ./cmd/gonx -c testdata/nginx_basic.conf
+go run ./cmd/crest -c testdata/nginx_basic.conf
 
 # validate a config (like nginx -t; works for both formats)
-go run ./cmd/gonx -t -c gonx.yml
+go run ./cmd/crest -t -c crest.yml
 
 # build
-go build -o gonx.exe ./cmd/gonx
+go build -o crest.exe ./cmd/crest
 ```
 
 ## YAML config at a glance
@@ -97,7 +101,7 @@ http:
 ```
 
 Unknown fields are rejected (`KnownFields`) so typos never slip through silently.
-A full runnable example lives at the repo root: `gonx.yml` (a direct translation
+A full runnable example lives at the repo root: `crest.yml` (a direct translation
 of `nginx.conf`).
 
 After starting, visit <http://localhost:8080/> (static page) and
@@ -123,7 +127,7 @@ across http/server/location).
 
 ## Runtime logs
 
-By default (when the config sets no explicit `access_log` / `error_log`), gonx
+By default (when the config sets no explicit `access_log` / `error_log`), crest
 splits runtime logs three ways into a `log/` directory **next to the executable**:
 
 | File | Contents |
@@ -138,29 +142,39 @@ Note: `error.log` here records **failed HTTP requests**; process-level errors
 - The directory is based on the **executable's location**, not the working
   directory — `log/` is created wherever the binary runs.
 - If the config sets `access_log` / `error_log` explicitly, that wins and no
-  split happens.
+  split happens — except for `error_log: stderr` (and `/dev/stderr`), which is
+  routed through the same tee as the default so runtime errors still land in
+  `console.log`. Writing to a detached process's bare stderr would throw them
+  away, which is exactly when you need them.
 - The `listening on` line in `console.log` is info level and filtered out by the
   default `error` level; set `error_log.level` to `info` to see it.
-- Pair with `gonx -s reopen` for log rotation.
+- Pair with `crest -s reopen` for log rotation.
 
 ## Ops commands
 
-Like `nginx -s`:
+Like `nginx -s`. `-c` may be omitted whenever the config is discoverable — the
+same probe the no-argument start uses, so running these from the config's own
+directory needs no path:
 
 ```sh
-gonx -s reload -c <conf>   # hot reload: switches only if the new config validates
-gonx -s reopen -c <conf>   # reopen log files (for external logrotate)
-gonx -s status -c <conf>   # show runtime status
-gonx -s stop   -c <conf>   # graceful stop
-gonx -s ui     -c <conf>   # open the browser admin console
+crest -s reload   # hot reload: switches only if the new config validates
+crest -s reopen   # reopen log files (for external logrotate)
+crest -s status   # show runtime status
+crest -s stop     # graceful stop
+crest -s ui       # open the browser admin console
+
+crest -s reload -c /etc/crest/crest.yml   # or point at one explicitly
 ```
+
+The control file is `<conf>.ctl`, so `-c` must name the *same* config the
+running instance was started with.
 
 ## Admin console
 
-The admin console **runs inside the gonx server process** (it is the control
+The admin console **runs inside the crest server process** (it is the control
 channel). Two ways to open it:
 
-1. `gonx -s ui -c <conf>` — open the browser any time (works with the default
+1. `crest -s ui -c <conf>` — open the browser any time (works with the default
    random port + random token)
 2. Pin the address in the config so it is ready at startup (bookmarkable,
    optional auto-open):
@@ -175,15 +189,17 @@ ui:
 
 The admin URL is printed to the terminal and `console.log` at startup. Changes to
 the `ui` section require a full restart (reload does not rebuild the control
-channel — gonx warns you if you reload after changing it). Keep `listen` on
+channel — crest warns you if you reload after changing it). Keep `listen` on
 `127.0.0.1`; binding a non-loopback address makes the console reachable from the
-network — add an `allow` list, or gonx warns.
+network — add an `allow` list, or crest warns.
 
 Features:
 
 - **Request stats**: total / 2xx / 3xx / 4xx / 5xx, live, with per-port filter
 - **One-click actions**: reload config, reopen logs, graceful stop
-- **Log viewer**: tail 200 lines of success.log / error.log / console.log, auto-refresh, with line numbers
+- **Log viewer**: tail 200 lines of success.log / error.log / console.log,
+  auto-refresh, line numbers, and a **clear** button for the log on screen
+  (truncates in place, so the running server keeps writing to it)
 - **In-browser config editor**: VS Code-style syntax highlighting; validated by
   the real parser before saving (a bad config is rejected with 400), auto-backup
   to `.bak`, one-click "save & reload"; a config help drawer with a full annotated example
@@ -197,7 +213,7 @@ Pure Go, no cgo — cross-compile to a dependency-free static binary (runs on an
 distro, or a `scratch` container):
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o gonx ./cmd/gonx
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o crest ./cmd/crest
 # arm64: GOARCH=arm64
 ```
 
@@ -205,8 +221,8 @@ Or build all targets at once with `./build.sh` (Windows with icon + Linux
 amd64/arm64).
 
 On Linux: binding ports 80/443 needs root or
-`setcap 'cap_net_bind_service=+ep' gonx`; log rotation works with standard
-logrotate (`mv` + `gonx -s reopen`) with none of Windows' file-locking limits.
+`setcap 'cap_net_bind_service=+ep' crest`; log rotation works with standard
+logrotate (`mv` + `crest -s reopen`) with none of Windows' file-locking limits.
 
 The control channel: the main process opens a token-guarded port on 127.0.0.1 and
 writes its address to `<conf>.ctl` (mode 0600), which the `-s` commands read —
@@ -268,7 +284,7 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 - **stream (L4)**: TCP and UDP proxying with upstream load balancing and
   failover; UDP keeps a session per client address, `proxy_responses` controls
   early session teardown
-- **error_page**: intercepts gonx-generated errors (404/502/503 …), internally
+- **error_page**: intercepts crest-generated errors (404/502/503 …), internally
   redirects to a custom page keeping the original status; upstream errors pass
   through (matching `proxy_intercept_errors off`, so a backend's JSON error is
   never replaced with HTML)
@@ -310,23 +326,29 @@ through uncached).
 ## Build
 
 ```sh
-go build -o gonx.exe ./cmd/gonx    # cmd/gonx/rsrc_windows.syso embeds the icon
-./build.sh                          # all targets: Windows + Linux amd64/arm64
+go build -o crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the icon
+./build.sh                          # all targets: Windows + Linux amd64/arm64,
+                                    # built with -trimpath so no absolute source
+                                    # paths from the build machine get embedded
 
 # regenerate the icon (ico for the exe + png for this README)
-go run ./tools/genicon -o cmd/gonx/gonx.ico -png gonx.png -png-size 200
+go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows.syso \
+    -png crest.png -png-size 200
 ```
 
 ## Layout
 
 ```
-cmd/gonx/            entry point (-c/-t/-v/-s, graceful shutdown), admin console
+cmd/crest/            entry point (-c/-t/-v/-s, graceful shutdown), admin console
 internal/config/     nginx.conf lexer/parser → AST → typed config; YAML loader
 internal/server/     listen aggregation, vhost & location matching, access logs
-internal/handler/    static files (root/alias/index), reverse proxy (with retry), gzip, cache
+internal/handler/    static files (root/alias/index), reverse proxy (with retry),
+                     gzip, cache, response buffering (proxy_buffering)
 internal/upstream/   load-balancing pools
 internal/logging/    access log (custom formats), leveled error log
 internal/{limiter,cache,auth,stream,vars}/  rate limiting, proxy cache, htpasswd, L4 proxy, variables
+tools/genicon/       draws the icon and emits both crest.ico and the Windows
+                     resource object (no external tool needed)
 ```
 
 ## Tests
@@ -336,6 +358,17 @@ go test ./...
 ```
 
 Covers: config parsing (quotes/comments/error recovery), location & server_name
-matching matrices, weighted round-robin distribution and eviction, and end-to-end
-(static + proxy + URI replacement + upstream failover + multiple vhosts + TLS/SNI
-+ rate limiting + cache + admin API).
+matching matrices, weighted round-robin distribution and eviction, config
+auto-discovery, and end-to-end (static + proxy + URI replacement + upstream
+failover + multiple vhosts + TLS/SNI + rate limiting + cache + admin API).
+
+Regression tests guard the failure modes that were hardest to find: WebSocket
+upgrades through every middleware combination and through an upstream pool,
+`root`/`alias` path mapping against traversal, HEAD not poisoning `proxy_cache`,
+query strings surviving an absolute `rewrite`, `error_page` starting from clean
+headers, and `proxy_buffering` releasing the backend ahead of a slow client.
+Run them with the race detector too — the buffering path is concurrent:
+
+```sh
+go test -race ./...
+```

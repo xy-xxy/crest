@@ -8,7 +8,7 @@ import (
 	"gopkg.in/yaml.v3"
 )
 
-// LoadYAML parses gonx's native YAML configuration into the same typed
+// LoadYAML parses crest's native YAML configuration into the same typed
 // *Config the nginx-syntax path produces, so the rest of the server is
 // format-agnostic.
 func LoadYAML(src []byte) (*Config, error) {

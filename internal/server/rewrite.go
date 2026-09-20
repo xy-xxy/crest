@@ -6,8 +6,8 @@ import (
 	"regexp"
 	"strings"
 
-	"gonx/internal/config"
-	"gonx/internal/vars"
+	"crest/internal/config"
+	"crest/internal/vars"
 )
 
 type rewriteRule struct {

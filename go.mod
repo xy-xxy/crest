@@ -1,4 +1,4 @@
-module gonx
+module crest
 
 go 1.20
 

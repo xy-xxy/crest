@@ -15,21 +15,21 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gonx/internal/cache"
-	"gonx/internal/config"
-	"gonx/internal/handler"
-	"gonx/internal/limiter"
-	"gonx/internal/logging"
-	"gonx/internal/stream"
-	"gonx/internal/upstream"
-	"gonx/internal/vars"
+	"crest/internal/cache"
+	"crest/internal/config"
+	"crest/internal/handler"
+	"crest/internal/limiter"
+	"crest/internal/logging"
+	"crest/internal/stream"
+	"crest/internal/upstream"
+	"crest/internal/vars"
 )
 
 // Version is stamped by main; it feeds the Server header (server_tokens)
 // and status displays.
 var Version = "dev"
 
-// Instance is a fully wired gonx server: one AddrServer per listen address.
+// Instance is a fully wired crest server: one AddrServer per listen address.
 type Instance struct {
 	Addrs []*AddrServer
 
@@ -119,7 +119,7 @@ type AddrServer struct {
 }
 
 // Options configures runtime log routing. When set and the config does not
-// specify its own paths, gonx splits access records into success/fail logs
+// specify its own paths, crest splits access records into success/fail logs
 // and writes process/error messages to Console.
 type Options struct {
 	// LogDir is the directory for the default success.log / fail.log split.
@@ -483,7 +483,7 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 }
 
 // resolveBuffering resolves proxy_buffering and its sizes with nearest-scope
-// precedence. nginx defaults it on, and so does gonx: the drain forwards data
+// precedence. nginx defaults it on, and so does crest: the drain forwards data
 // as soon as it arrives, so buffering costs incremental responses nothing.
 func (i *Instance) resolveBuffering(sv *config.Server, loc *config.Location) (handler.BufferOptions, bool) {
 	h := i.cfg.HTTP
@@ -670,9 +670,9 @@ func serverHeaderValue(levels ...*bool) string {
 		}
 	}
 	if tokens {
-		return "gonx/" + Version
+		return "crest/" + Version
 	}
-	return "gonx"
+	return "crest"
 }
 
 func resolveMaxBody(h *config.HTTP, sv *config.Server, loc *config.Location) int64 {

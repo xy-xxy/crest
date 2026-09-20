@@ -5,9 +5,9 @@ import (
 	"net/http"
 	"time"
 
-	"gonx/internal/config"
-	"gonx/internal/logging"
-	"gonx/internal/vars"
+	"crest/internal/config"
+	"crest/internal/logging"
+	"crest/internal/vars"
 )
 
 func (i *Instance) wrapLimitReq(h http.Handler, use *config.LimitReqUse) (http.Handler, error) {

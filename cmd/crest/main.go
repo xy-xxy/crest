@@ -21,30 +21,40 @@ import (
 	"syscall"
 	"time"
 
-	"gonx/internal/config"
-	"gonx/internal/server"
+	"crest/internal/config"
+	"crest/internal/server"
 )
 
-const version = "0.5.0"
+const version = "0.6.0"
 
 func main() {
 	server.Version = version
-	if addr := os.Getenv("GONX_PPROF"); addr != "" {
+	if addr := os.Getenv("CREST_PPROF"); addr != "" {
 		go http.ListenAndServe(addr, nil) // net/http/pprof registers on DefaultServeMux
 	}
-	confPath := flag.String("c", "gonx.conf", "path to configuration file")
+	confPath := flag.String("c", "", "path to configuration file (default: the first of "+
+		strings.Join(configNames, " / ")+" found in the working directory, then beside the executable)")
 	testOnly := flag.Bool("t", false, "test configuration and exit")
 	showVersion := flag.Bool("v", false, "print version and exit")
-	sigCmd := flag.String("s", "", "send signal to a running gonx: reload, reopen, stop, status, ui")
+	sigCmd := flag.String("s", "", "send signal to a running crest: reload, reopen, stop, status, ui")
 	flag.Parse()
 
 	if *showVersion {
-		fmt.Printf("gonx version: gonx/%s\n", version)
+		fmt.Printf("crest version: crest/%s\n", version)
 		return
 	}
+	// 双击启动时没有命令行参数，此处自动找配置；显式 -c 一律优先。
+	// 这里先不因错误退出：-s / -t 是从终端运行的，报到 stderr 即可；而正常
+	// 启动多半来自双击，窗口会随失败一同消失，得等日志就绪后报进 console.log。
+	resolved, autoFound, confErr := resolveConfigPath(*confPath)
+
 	if *sigCmd != "" {
-		if err := sendSignal(*sigCmd, *confPath); err != nil {
-			fmt.Fprintf(os.Stderr, "gonx: %v\n", err)
+		if confErr != nil {
+			fmt.Fprintf(os.Stderr, "crest: %v\n", confErr)
+			os.Exit(1)
+		}
+		if err := sendSignal(*sigCmd, resolved); err != nil {
+			fmt.Fprintf(os.Stderr, "crest: %v\n", err)
 			os.Exit(1)
 		}
 		return
@@ -52,16 +62,20 @@ func main() {
 
 	// -t validates the config without producing runtime logs or a log dir
 	if *testOnly {
-		cfg, err := loadConfig(*confPath)
+		if confErr != nil {
+			fmt.Fprintf(os.Stderr, "crest: %v\n", confErr)
+			os.Exit(1)
+		}
+		cfg, err := loadConfig(resolved)
 		if err != nil {
-			fmt.Fprintf(os.Stderr, "gonx: [emerg] %v\n", err)
+			fmt.Fprintf(os.Stderr, "crest: [emerg] %v\n", err)
 			os.Exit(1)
 		}
 		for _, w := range cfg.Warnings {
-			fmt.Fprintf(os.Stderr, "gonx: [warn] %s\n", w)
+			fmt.Fprintf(os.Stderr, "crest: [warn] %s\n", w)
 		}
-		fmt.Printf("gonx: the configuration file %s syntax is ok\n", *confPath)
-		fmt.Printf("gonx: configuration file %s test is successful\n", *confPath)
+		fmt.Printf("crest: the configuration file %s syntax is ok\n", resolved)
+		fmt.Printf("crest: configuration file %s test is successful\n", resolved)
 		return
 	}
 
@@ -69,26 +83,35 @@ func main() {
 	opts, console, closeConsole := setupLogging()
 	defer closeConsole()
 
-	cfg, err := loadConfig(*confPath)
+	// 此刻 console 已同时写向 stderr 与 log/console.log：双击启动若因找不到
+	// 配置而失败，窗口关掉之后仍能在 console.log 里看到找过哪些路径。
+	if confErr != nil {
+		fmt.Fprintf(console, "crest: [emerg] %v\n", confErr)
+		os.Exit(1)
+	}
+	if autoFound {
+		fmt.Fprintf(console, "crest: using configuration file %s\n", resolved)
+	}
+	cfg, err := loadConfig(resolved)
 	if err != nil {
-		fmt.Fprintf(console, "gonx: [emerg] %v\n", err)
+		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
 		os.Exit(1)
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(console, "gonx: [warn] %s\n", w)
+		fmt.Fprintf(console, "crest: [warn] %s\n", w)
 	}
 
 	inst, err := server.NewWithOptions(cfg, opts)
 	if err != nil {
-		fmt.Fprintf(console, "gonx: [emerg] %v\n", err)
+		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
 		os.Exit(1)
 	}
-	ru := &runner{confPath: *confPath, inst: inst, opts: opts, console: console, ui: cfg.UI, errs: make(chan error, 8), quit: make(chan struct{})}
+	ru := &runner{confPath: resolved, inst: inst, opts: opts, console: console, ui: cfg.UI, errs: make(chan error, 8), quit: make(chan struct{})}
 	ru.watch(inst.Start())
 
-	stopCtl, err := startControl(ru, *confPath, cfg.UI)
+	stopCtl, err := startControl(ru, resolved, cfg.UI)
 	if err != nil {
-		fmt.Fprintf(console, "gonx: [warn] control channel unavailable (-s will not work): %v\n", err)
+		fmt.Fprintf(console, "crest: [warn] control channel unavailable (-s will not work): %v\n", err)
 	} else {
 		defer stopCtl()
 	}
@@ -98,18 +121,18 @@ func main() {
 
 	select {
 	case err := <-ru.errs:
-		fmt.Fprintf(console, "gonx: [emerg] %v\n", err)
+		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
 		os.Exit(1)
 	case sig := <-sigc:
-		fmt.Fprintf(console, "gonx: received %v, shutting down gracefully\n", sig)
+		fmt.Fprintf(console, "crest: received %v, shutting down gracefully\n", sig)
 	case <-ru.quit:
-		fmt.Fprintln(console, "gonx: stop requested via control channel, shutting down gracefully")
+		fmt.Fprintln(console, "crest: stop requested via control channel, shutting down gracefully")
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
 	defer cancel()
 	if err := ru.shutdown(ctx); err != nil {
-		fmt.Fprintf(console, "gonx: shutdown: %v\n", err)
+		fmt.Fprintf(console, "crest: shutdown: %v\n", err)
 		os.Exit(1)
 	}
 }
@@ -122,12 +145,12 @@ func setupLogging() (server.Options, io.Writer, func()) {
 		logDir = filepath.Join(filepath.Dir(exe), "log")
 	}
 	if err := os.MkdirAll(logDir, 0755); err != nil {
-		fmt.Fprintf(os.Stderr, "gonx: [warn] cannot create log dir %s: %v\n", logDir, err)
+		fmt.Fprintf(os.Stderr, "crest: [warn] cannot create log dir %s: %v\n", logDir, err)
 		return server.Options{}, os.Stderr, func() {}
 	}
 	f, err := os.OpenFile(filepath.Join(logDir, "console.log"), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0644)
 	if err != nil {
-		fmt.Fprintf(os.Stderr, "gonx: [warn] cannot open console.log: %v\n", err)
+		fmt.Fprintf(os.Stderr, "crest: [warn] cannot open console.log: %v\n", err)
 		return server.Options{LogDir: logDir}, os.Stderr, func() {}
 	}
 	console := io.MultiWriter(os.Stderr, f)
@@ -167,12 +190,12 @@ func (ru *runner) reload() (note string, err error) {
 		return "", err
 	}
 	for _, w := range cfg.Warnings {
-		fmt.Fprintf(ru.console, "gonx: [warn] %s\n", w)
+		fmt.Fprintf(ru.console, "crest: [warn] %s\n", w)
 	}
 	// 控制通道（含 ui.allow / listen / token）在进程启动时固定，reload 不重建
 	if !reflect.DeepEqual(ru.ui, cfg.UI) {
 		note = "注意：ui 段已变更，但控制通道在进程启动时固定，需完全重启（-s stop 后重新启动）才生效"
-		fmt.Fprintln(ru.console, "gonx: [warn] "+note)
+		fmt.Fprintln(ru.console, "crest: [warn] "+note)
 	}
 	ni, err := server.NewWithOptions(cfg, ru.opts)
 	if err != nil {
@@ -185,7 +208,7 @@ func (ru *runner) reload() (note string, err error) {
 	cancel()
 	ru.inst = ni
 	ru.watch(ni.Start())
-	fmt.Fprintln(ru.console, "gonx: configuration reloaded")
+	fmt.Fprintln(ru.console, "crest: configuration reloaded")
 	return note, nil
 }
 
@@ -200,8 +223,8 @@ func (ru *runner) requestStop() {
 }
 
 // startControl serves the admin console and reload/stop/status on a loopback
-// port — inside the same gonx process as the proxy itself. The address and
-// an access token live in <conf>.ctl, which "gonx -s <cmd> -c <conf>" reads.
+// port — inside the same crest process as the proxy itself. The address and
+// an access token live in <conf>.ctl, which "crest -s <cmd> -c <conf>" reads.
 // A "ui" config section pins the address/token and can auto-open the browser.
 func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup func(), err error) {
 	listen := "127.0.0.1:0"
@@ -216,9 +239,9 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		listen = ui.Listen
 		if host, _, err := net.SplitHostPort(listen); err != nil || host == "" || host == "0.0.0.0" || host == "::" {
 			if len(allow) == 0 {
-				fmt.Fprintf(ru.console, "gonx: [warn] ui.listen %q is not loopback-only and no ui.allow list is set; the console is reachable from the whole network (token is the only guard)\n", listen)
+				fmt.Fprintf(ru.console, "crest: [warn] ui.listen %q is not loopback-only and no ui.allow list is set; the console is reachable from the whole network (token is the only guard)\n", listen)
 			} else {
-				fmt.Fprintf(ru.console, "gonx: [info] ui.listen %q restricted to allow list %v\n", listen, ui.Allow)
+				fmt.Fprintf(ru.console, "crest: [info] ui.listen %q restricted to allow list %v\n", listen, ui.Allow)
 			}
 		}
 	}
@@ -290,13 +313,13 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 			addrs = append(addrs, a.Addr)
 		}
 		ru.mu.Unlock()
-		fmt.Fprintf(w, "gonx/%s pid=%d listening=%s\n", version, os.Getpid(), strings.Join(addrs, ","))
+		fmt.Fprintf(w, "crest/%s pid=%d listening=%s\n", version, os.Getpid(), strings.Join(addrs, ","))
 	}))
 
 	srv := &http.Server{Handler: withIPAllowlist(mux, allow)}
 	go srv.Serve(ln)
 	url := "http://" + reachable + "/ui?token=" + token
-	fmt.Fprintf(ru.console, "gonx: 管理页面 %s\n", url)
+	fmt.Fprintf(ru.console, "crest: 管理页面 %s\n", url)
 	if ui != nil && ui.Open {
 		openBrowser(url)
 	}
@@ -380,7 +403,7 @@ func sendSignal(action, confPath string) error {
 	}
 	data, err := os.ReadFile(confPath + ".ctl")
 	if err != nil {
-		return fmt.Errorf("cannot read control file %s.ctl (is gonx running with -c %s?)", confPath, confPath)
+		return fmt.Errorf("cannot read control file %s.ctl (is crest running with -c %s?)", confPath, confPath)
 	}
 	parts := strings.Fields(string(data))
 	if len(parts) != 2 {
@@ -390,7 +413,7 @@ func sendSignal(action, confPath string) error {
 	if err != nil {
 		return err
 	}
-	req.Header.Set("X-Gonx-Token", parts[1])
+	req.Header.Set("X-Crest-Token", parts[1])
 	client := &http.Client{Timeout: 30 * time.Second}
 	resp, err := client.Do(req)
 	if err != nil {
@@ -403,6 +426,57 @@ func sendSignal(action, confPath string) error {
 	}
 	fmt.Print(string(body))
 	return nil
+}
+
+// configNames 是省略 -c 时依次探测的文件名，让双击启动的 exe 无需任何参数
+// 就能找到自己的配置。YAML 在前：它是推荐格式，也是双击场景下的常见形态。
+var configNames = []string{"crest.yml", "crest.yaml", "crest.conf"}
+
+// resolveConfigPath 返回实际使用的配置路径。显式 -c 原样返回；省略时在工作
+// 目录、再在可执行文件所在目录里按 configNames 顺序查找 —— 双击启动时这两
+// 处是配置可能存放的位置（从资源管理器双击通常是前者，从快捷方式启动则可能
+// 只有后者成立）。autoFound 标识是否来自自动探测，供启动日志说明来源。
+func resolveConfigPath(explicit string) (path string, autoFound bool, err error) {
+	if explicit != "" {
+		return explicit, false, nil
+	}
+	p, err := findConfig(configSearchDirs())
+	return p, true, err
+}
+
+// configSearchDirs 依次是工作目录与可执行文件所在目录，去重后返回。
+func configSearchDirs() []string {
+	var dirs []string
+	if wd, err := os.Getwd(); err == nil {
+		dirs = append(dirs, wd)
+	}
+	if exe, err := os.Executable(); err == nil {
+		d := filepath.Dir(exe)
+		if len(dirs) == 0 || d != dirs[0] {
+			dirs = append(dirs, d)
+		}
+	}
+	return dirs
+}
+
+// findConfig 在给定目录里按 configNames 顺序找第一个存在的配置文件；都没有
+// 时，错误信息列出全部找过的路径，免得使用者只看到一句"找不到配置"。
+func findConfig(dirs []string) (string, error) {
+	var tried []string
+	for _, dir := range dirs {
+		for _, name := range configNames {
+			p := filepath.Join(dir, name)
+			if st, err := os.Stat(p); err == nil && !st.IsDir() {
+				return p, nil
+			}
+			tried = append(tried, p)
+		}
+	}
+	if len(tried) == 0 {
+		return "", errors.New("no configuration file given and none could be looked for; use -c")
+	}
+	return "", fmt.Errorf("no configuration file found. Looked for:\n  %s\nPass one with -c, or put a %s next to the executable",
+		strings.Join(tried, "\n  "), configNames[0])
 }
 
 func loadConfig(path string) (*config.Config, error) {

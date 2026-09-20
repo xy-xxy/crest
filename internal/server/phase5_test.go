@@ -289,8 +289,8 @@ http {
     server { listen 8080; location / { return 200 "ok"; } }
 }`
 	for _, tc := range []struct{ conf, wantPrefix string }{
-		{on, "gonx/"}, // 带版本
-		{off, "gonx"}, // 仅名称
+		{on, "crest/"}, // 带版本
+		{off, "crest"}, // 仅名称
 	} {
 		inst := buildInstance(t, tc.conf)
 		ts := httptest.NewServer(inst.Addrs[0])
@@ -300,11 +300,11 @@ http {
 		}
 		resp.Body.Close()
 		got := resp.Header.Get("Server")
-		if tc.wantPrefix == "gonx/" && got != "gonx/"+Version {
+		if tc.wantPrefix == "crest/" && got != "crest/"+Version {
 			t.Errorf("server_tokens on: Server = %q", got)
 		}
-		if tc.wantPrefix == "gonx" && got != "gonx" {
-			t.Errorf("server_tokens off: Server = %q, want plain gonx", got)
+		if tc.wantPrefix == "crest" && got != "crest" {
+			t.Errorf("server_tokens off: Server = %q, want plain crest", got)
 		}
 		ts.Close()
 	}

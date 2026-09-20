@@ -1,5 +1,5 @@
-# gonx 原生 YAML 配置 —— 等价于 nginx.conf
-# 用法: gonx.exe -c gonx.yml   (按扩展名自动识别为 YAML)
+# crest 原生 YAML 配置 —— 等价于 nginx.conf
+# 用法: crest.exe -c crest.yml   (按扩展名自动识别为 YAML)
 ui:
   listen: 0.0.0.0:8899                                                                # 固定管理端口（默认随机）
   token: ZVLbwzesmN2dzcHvR3fGgxo6felio2sGmX3mZPIzSluoCottcLv4uMQOz6xEQA9LQZHmCucS       # 固定访问令牌（默认每次启动随机生成）
@@ -99,7 +99,7 @@ http:
           match: exact
           root: D:/Tools/nginx-1.26.0/html
 
-    # AI 模型 / WebSocket（Upgrade 头由 gonx 自动处理，无需手写）
+    # AI 模型 / WebSocket（Upgrade 头由 crest 自动处理，无需手写）
     - listen: [12306]
       server_name: [localhost]
       locations:

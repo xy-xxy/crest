@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"gonx/internal/config"
+	"crest/internal/config"
 )
 
 // backendHoldTime proxies a large response to a deliberately slow client and
@@ -118,7 +118,7 @@ http:
 }
 
 // TestProxyBufferingBothFrontEnds pins the two loaders to the same result,
-// the invariant every directive in gonx has to hold.
+// the invariant every directive in crest has to hold.
 func TestProxyBufferingBothFrontEnds(t *testing.T) {
 	ngx, err := config.Parse(`
 http {

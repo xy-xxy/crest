@@ -108,7 +108,7 @@ func (c *Config) resolvePaths(base string) {
 	}
 }
 
-// looksLikeYAML reports whether config data is gonx's YAML format rather than
+// looksLikeYAML reports whether config data is crest's YAML format rather than
 // nginx syntax, by testing whether the first meaningful line is a top-level
 // YAML key. nginx blocks open with "http {" (no colon) and directives end in
 // ";", so the two never collide.

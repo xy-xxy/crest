@@ -1,17 +1,42 @@
-# gonx
+# crest
 
 A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
+
+## v0.6.0
+
+**Renamed: gonx → crest.** The old name carried nginx's shadow, and this project long outgrew "nginx, but in Go". A crest is the lip of a weir — the line water passes over, which is exactly where traffic gets routed, split and throttled.
+
+Upgrading needs manual steps; every one of these identifiers changed:
+
+| Item | Old | New |
+|---|---|---|
+| Executable | `gonx.exe` / `gonx-linux-*` | `crest.exe` / `crest-linux-*` |
+| Default config file | `gonx.conf` | `crest.conf` |
+| Control file | `<conf>.ctl` | unchanged |
+| Admin token header | `X-Gonx-Token` | `X-Crest-Token` |
+| Admin console cookie | `gonx_token` | `crest_token` |
+| pprof env var | `GONX_PPROF` | `CREST_PPROF` |
+| `Server` response header | `gonx/<version>` | `crest/<version>` |
+| Go module path | `gonx` | `crest` |
+
+**Config file contents need no changes** — directive syntax and YAML field names are identical. Rename `gonx.yml` to `crest.yml` (or keep any name and pass `-c`). Ops commands go from `gonx -s reload` to `crest -s reload`.
+
+**The config file is auto-detected when `-c` is omitted.** The default used to be a fixed `crest.conf`, while the recommended format is YAML — so double-clicking the exe on Windows usually failed outright, with the console vanishing before the message could be read. Omitting `-c` now probes `crest.yml` / `crest.yaml` / `crest.conf` in the working directory and then beside the executable, and `-s reload` and friends resolve the same way. When nothing is found the error lists every path tried instead of just saying no config exists, and it is written to `log/console.log` as well, so it survives the window closing. An explicit `-c` behaves exactly as before.
+
+New icon too: the old one was nginx green with a white letter G — both parts of the old identity. The new mark is a deep-blue-to-cyan gradient behind two white water lines (a cresting wave over its wake). `genicon` now also emits the Windows resource object `rsrc_windows.syso` directly, which previously needed an external tool like rsrc or goversioninfo, so the exe icon rebuilds with the project.
+
+Release builds now pass `-trimpath`, so binaries no longer embed the build machine's absolute source paths (which previously leaked the builder's username and directory layout).
 
 ## v0.5.0
 
 Added:
 
 - **`proxy_buffering` / `proxy_buffers` / `proxy_max_temp_file_size`** — the
-  last substantial mechanism gonx was missing next to nginx: buffering the
+  last substantial mechanism crest was missing next to nginx: buffering the
   upstream response so a slow client no longer holds the backend connection
-  open. gonx streamed straight through before, so a slow download pinned the
+  open. crest streamed straight through before, so a slow download pinned the
   upstream for its whole duration (measured: a 4MB response to a 12MB/s client
   held the backend ~150ms); with buffering the same case releases it in
   **1–9ms**. On by default, matching nginx, inherited http < server < location.
@@ -29,7 +54,7 @@ Added:
   the buffer in memory only, falling back to back-pressure past it; and
   `proxy_buffering: false` streams straight through. `proxy_buffer_size`,
   `proxy_busy_buffers_size`, `proxy_request_buffering` and
-  `proxy_temp_file_write_size` have no counterpart in gonx and are now
+  `proxy_temp_file_write_size` have no counterpart in crest and are now
   accepted silently instead of warned about.
 
 ## v0.4.7
@@ -49,12 +74,12 @@ Security fixes:
   world-readable.** The backup is a full copy of the config, which normally
   carries `ui.token`. The control file `.ctl` has always been written 0600,
   but the backup was hard-coded to 0644, so any local user could read the
-  admin token out of `gonx.yml.bak`. The backup now inherits the original
+  admin token out of `crest.yml.bak`. The backup now inherits the original
   config file's permission bits, falling back to 0600.
 - **`..\` escaped the configured root on Windows.** A backslash in the URI is
   an ordinary character to `path.Clean`, but Windows `filepath.Join` treats it
   as a real separator and resolves the `..`, so a request like
-  `/..%5C..%5Cgonx.yml` could read files outside the root — including the
+  `/..%5C..%5Ccrest.yml` could read files outside the root — including the
   config file holding the admin token. Linux was unaffected (a backslash is a
   legal filename character there). The mapping now normalises backslashes to
   URI separators before cleaning and re-checks that the result is still inside
@@ -76,7 +101,7 @@ Fixes:
 - **`error_page` handed the intercepted response's headers to the error
   page.** The 502's own `Content-Type: text/plain` overrode the error page's
   real type, so a custom HTML page **rendered as source** in the browser, and
-  the internal interception marker `X-Gonx-Internal` leaked to the client. The
+  the internal interception marker `X-Crest-Internal` leaked to the client. The
   staged headers are now cleared on interception, so the error page starts as
   a fresh response the way nginx builds it.
 - **A server with only proxy locations and no `root` answered 500 instead of
@@ -92,7 +117,7 @@ Fixes:
   now; HEAD still reads from one a GET created.
 - **`rewrite` to an absolute URL dropped the original query string.** nginx
   appends the previous request arguments to the replacement unless it ends in
-  `?`; gonx did that only for local replacements and redirected to an absolute
+  `?`; crest did that only for local replacements and redirected to an absolute
   URL verbatim, so `rewrite ^/x/(.*)$ http://host/$1 redirect;` lost the
   client's `?a=1` entirely. A trailing `?` no longer leaves a bare `?` dangling
   in the `Location` header either.
@@ -109,7 +134,7 @@ Fixes:
 - **`error_log: {path: stderr}` silently swallowed every runtime error.**
   Errors only reached `log/console.log` when `error_log` was unset; an explicit
   `stderr` wrote to the process's raw stderr instead — which nobody reads when
-  gonx runs as a Windows service, a double-clicked exe, or any detached process,
+  crest runs as a Windows service, a double-clicked exe, or any detached process,
   so diagnostics like `proxy error for ...` were lost and a 502 left nothing but
   a bare status code in the access log. `stderr` (and `/dev/stderr`) now go
   through the console tee like the unset case, reaching both the terminal and
@@ -132,7 +157,7 @@ Performance fix:
 
 - **Backend idle connection pool default raised 16 → 100.** Load testing showed the old default starved mid/high concurrency: each request was forced to open/close a fresh backend TCP connection (connect/close syscall storm + TIME_WAIT buildup), halving throughput and pushing tail latency into the seconds. After the fix, the same load doubles throughput and drops p100 tail from ~2900ms to ~40ms. Very high concurrency should still set an explicit upstream `keepalive` matching the load (but not excessively large).
 - Reverse proxy no longer probes for HTTP/2 (`ForceAttemptHTTP2: false`) — saves overhead when the backend is plain HTTP/1.1.
-- New diagnostic: set `GONX_PPROF=127.0.0.1:6060` to enable Go pprof (off by default) for load-test profiling.
+- New diagnostic: set `CREST_PPROF=127.0.0.1:6060` to enable Go pprof (off by default) for load-test profiling.
 
 ## v0.4.3
 
@@ -184,7 +209,7 @@ Performance fix:
 
 ## Highlights
 
-- 🎛️ **Browser admin console** (`gonx -s ui`) — live request stats with
+- 🎛️ **Browser admin console** (`crest -s ui`) — live request stats with
   per-port filtering, in-browser config editor with syntax highlighting and
   validate-before-save, log viewer, one-click reload/stop.
 - 📝 **Native YAML config** — alongside `nginx.conf` syntax, auto-detected by
@@ -206,8 +231,8 @@ Performance fix:
   `{address: ...}` still works).
 - Relative paths inside the config (root/alias/certs/htpasswd/logs/cache dirs)
   resolve against the **config file's directory**, not the working directory;
-  missing roots/certs are warned at load time so `gonx -t` catches them.
-- New ops commands: `gonx -s ui` (open console), `gonx -s reopen` (log rotation).
+  missing roots/certs are warned at load time so `crest -t` catches them.
+- New ops commands: `crest -s ui` (open console), `crest -s reopen` (log rotation).
 
 ## Full feature set
 
@@ -233,9 +258,9 @@ server).
 
 | Platform | File |
 |---|---|
-| Windows x64 | `gonx.exe` |
-| Linux x64 | `gonx-linux-amd64` |
-| Linux arm64 | `gonx-linux-arm64` |
+| Windows x64 | `crest.exe` |
+| Linux x64 | `crest-linux-amd64` |
+| Linux arm64 | `crest-linux-arm64` |
 
 Verify with `SHA256SUMS.txt`. Built with Go 1.20+; runs as a single static
 binary with no runtime dependencies.

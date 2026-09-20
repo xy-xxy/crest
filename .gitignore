@@ -1,5 +1,5 @@
 # 项目排除路径
 /dist/
 /log/
-/gonx.yml.bak
-/gonx.yml.ctl
+/crest.yml.bak
+/crest.yml.ctl

@@ -9,9 +9,9 @@ import (
 	"sync/atomic"
 	"time"
 
-	"gonx/internal/config"
-	"gonx/internal/logging"
-	"gonx/internal/upstream"
+	"crest/internal/config"
+	"crest/internal/logging"
+	"crest/internal/upstream"
 )
 
 // Server proxies one listen address at L4.

@@ -7,8 +7,8 @@ import (
 	"regexp"
 	"strings"
 
-	"gonx/internal/config"
-	"gonx/internal/logging"
+	"crest/internal/config"
+	"crest/internal/logging"
 )
 
 type vhost struct {

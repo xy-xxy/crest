@@ -14,7 +14,7 @@ import (
 	"testing"
 	"time"
 
-	"gonx/internal/handler"
+	"crest/internal/handler"
 )
 
 func freeAddr(t *testing.T) string {
@@ -169,7 +169,7 @@ func TestErrorPage(t *testing.T) {
 	defer backend.Close()
 	bu, _ := url.Parse(backend.URL)
 
-	// a dead backend for the gonx-generated 502 case
+	// a dead backend for the crest-generated 502 case
 	dead := freeAddr(t)
 
 	conf := fmt.Sprintf(`
@@ -196,7 +196,7 @@ http {
 	ts := httptest.NewServer(inst.Addrs[0])
 	defer ts.Close()
 
-	// gonx's own 404 → custom page with status 404
+	// crest's own 404 → custom page with status 404
 	if code, body := get(t, ts, "/missing", ""); code != 404 || !strings.Contains(body, "custom error page") {
 		t.Errorf("404 error_page: %d %q", code, body)
 	}
@@ -204,7 +204,7 @@ http {
 	if code, body := get(t, ts, "/api/x", ""); code != 500 || body != "backend-error-body" {
 		t.Errorf("upstream 500 must not be intercepted: %d %q", code, body)
 	}
-	// gonx-generated 502 (backend down) → custom page with status 502
+	// crest-generated 502 (backend down) → custom page with status 502
 	if code, body := get(t, ts, "/down/x", ""); code != 502 || !strings.Contains(body, "custom error page") {
 		t.Errorf("502 error_page: %d %q", code, body)
 	}
@@ -256,7 +256,7 @@ func TestErrorPageStartsWithCleanHeaders(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "50x.html"), []byte(page), 0644); err != nil {
 		t.Fatal(err)
 	}
-	// port 1 never accepts, so gonx generates the 502 itself
+	// port 1 never accepts, so crest generates the 502 itself
 	conf := fmt.Sprintf(`
 http {
     access_log off;

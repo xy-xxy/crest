@@ -9,12 +9,12 @@ import (
 	"strings"
 	"testing"
 
-	"gonx/internal/handler"
+	"crest/internal/handler"
 )
 
 // TestStaticNoRootFallsThroughTo404 covers a proxy-only server: it has no
 // root and no "/" location, so unmatched requests reach the synthetic
-// catch-all. nginx looks under its built-in default root and 404s; gonx used
+// catch-all. nginx looks under its built-in default root and 404s; crest used
 // to answer 500, turning every stray /favicon.ico into a server error.
 func TestStaticNoRootFallsThroughTo404(t *testing.T) {
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
