@@ -2,6 +2,22 @@
 
 本项目遵循语义化版本（0.x 阶段，次版本号递增表示新增功能）。
 
+## v0.7.0
+
+新增与修复：
+
+- 新增令牌保护的 JSON `/healthz`、`/readyz`；只有 HTTP 或 stream listener
+  成功绑定后才就绪，Shutdown 开始时立即变为未就绪。
+- `/status` 保留兼容的一行文本格式，并支持 `Accept: application/json` 或
+  `/status?format=json` 返回结构化状态。
+- `proxy_cache` 正式支持 Vary 变体和常数时间索引；`Vary: *` 不缓存，GET
+  写入共享条目，HEAD 可读取但不会用空 body 污染 GET。
+- 反代处理结束后恢复原始请求的 Host 和 URL，避免复用 request 对象时改变
+  缓存键；可缓存响应在释放给客户端前先完成写盘和索引更新，避免紧随其后的
+  请求与缓存写入竞态。
+
+缓存索引仍只在内存中，重启后冷启动；FastCGI 与 stream TLS 终止仍属于后续工作。
+
 ## v0.6.0
 
 **项目更名：gonx → crest。** 原名带着 nginx 的影子，而这个项目早已不只是「Go 写的 nginx」。crest 取「堰顶」之意 —— 水流越过堰坝的那道脊线，正是流量被引导、分流、限速的位置。

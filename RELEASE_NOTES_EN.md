@@ -4,6 +4,26 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v0.7.0
+
+Added and fixed:
+
+- Added token-protected JSON `/healthz` and `/readyz`. `/readyz` reports ready
+  only after an HTTP or stream listener binds successfully, and becomes
+  unavailable as shutdown begins.
+- Added JSON status output through `Accept: application/json` or
+  `/status?format=json`, while keeping the compatible one-line text `/status`.
+- Added production `proxy_cache` Vary variants with constant-time lookup;
+  `Vary: *` responses are skipped, GET populates shared entries, and HEAD can
+  read them without poisoning the body.
+- Restored the original request Host and URL after proxy handling so reusing a
+  request object cannot change its cache key. Cacheable responses are inserted
+  before their buffered body is released to the client, preventing an
+  immediate follow-up request from racing the cache write.
+
+The cache index is still in-memory and cold after restart. FastCGI and TLS
+termination for stream remain future work.
+
 ## v0.6.0
 
 **Renamed: gonx → crest.** The old name carried nginx's shadow, and this project long outgrew "nginx, but in Go". A crest is the lip of a weir — the line water passes over, which is exactly where traffic gets routed, split and throttled.

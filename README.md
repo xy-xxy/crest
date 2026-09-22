@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.6.0-17a2c6)
+![Version](https://img.shields.io/badge/version-v0.7.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.6.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.7.0**
 
 crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -169,6 +169,10 @@ crest -s reload -c /etc/crest/crest.yml   # or point at one explicitly
 The control file is `<conf>.ctl`, so `-c` must name the *same* config the
 running instance was started with.
 
+The token-protected control channel exposes JSON `/healthz` and `/readyz`, plus
+the compatible text `/status`. Send `Accept: application/json` or use
+`/status?format=json` for structured status data.
+
 ## Admin console
 
 The admin console **runs inside the crest server process** (it is the control
@@ -279,8 +283,9 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 - **proxy_cache**: disk store + in-memory index; TTL priority is upstream
   `Cache-Control`/`Expires` > `proxy_cache_valid`; `no-store`/`private`/
   `Set-Cookie`/`Authorization` requests are not cached; responses carry
-  `X-Cache-Status: HIT|MISS`. Cold after restart (index not persisted), `Vary`
-  not yet handled
+  `X-Cache-Status: HIT|MISS`. Cold after restart (index not persisted), and
+  `Vary` selects independent variants by request header. GET and HEAD share
+  entries, only GET populates them, and `Vary: *` is never cached.
 - **stream (L4)**: TCP and UDP proxying with upstream load balancing and
   failover; UDP keeps a session per client address, `proxy_responses` controls
   early session teardown
@@ -320,8 +325,8 @@ and plain. Requests with a body are not retried on upstream failure (the body ma
 already be consumed). Single cached object capped at 8MB (larger ones pass
 through uncached).
 
-- **TODO**: FastCGI (for PHP setups), `proxy_cache` `Vary` support and index
-  persistence, TLS termination for stream
+- **TODO**: FastCGI (for PHP setups), `proxy_cache` index persistence, TLS
+  termination for stream
 
 ## Build
 

@@ -47,7 +47,11 @@ type Instance struct {
 	maps          []compiledMap
 
 	started time.Time
+	ready   atomic.Bool
+	closed  atomic.Bool
 }
+
+func (i *Instance) Ready() bool { return i.ready.Load() && !i.closed.Load() }
 
 // Stats is a snapshot of request counters since this instance started.
 type Stats struct {
@@ -968,6 +972,8 @@ func (i *Instance) Start() <-chan error {
 	for _, st := range i.streams {
 		if err := st.Start(); err != nil {
 			errc <- fmt.Errorf("stream listen %s: %w", st.Addr(), err)
+		} else {
+			i.ready.Store(true)
 		}
 	}
 	for _, a := range i.Addrs {
@@ -982,6 +988,7 @@ func (i *Instance) Start() <-chan error {
 			errc <- fmt.Errorf("listen %s: %w", a.Addr, err)
 			continue
 		}
+		i.ready.Store(true)
 		go func(a *AddrServer, ln net.Listener) {
 			var err error
 			if a.tlsConf != nil {
@@ -1032,6 +1039,7 @@ func (i *Instance) Reopen() error {
 }
 
 func (i *Instance) Shutdown(ctx context.Context) error {
+	i.closed.Store(true)
 	var first error
 	for _, st := range i.streams {
 		st.Close()

@@ -4,6 +4,7 @@ import (
 	"context"
 	"crypto/rand"
 	"encoding/hex"
+	"encoding/json"
 	"errors"
 	"flag"
 	"fmt"
@@ -25,7 +26,7 @@ import (
 	"crest/internal/server"
 )
 
-const version = "0.6.0"
+const version = "0.7.0"
 
 func main() {
 	server.Version = version
@@ -278,6 +279,22 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 			h(w, r)
 		}
 	}
+	mux := newControlMux(ru, token, auth)
+
+	srv := &http.Server{Handler: withIPAllowlist(mux, allow)}
+	go srv.Serve(ln)
+	url := "http://" + reachable + "/ui?token=" + token
+	fmt.Fprintf(ru.console, "crest: 管理页面 %s\n", url)
+	if ui != nil && ui.Open {
+		openBrowser(url)
+	}
+	return func() {
+		srv.Close()
+		os.Remove(ctlPath)
+	}, nil
+}
+
+func newControlMux(ru *runner, token string, auth func(http.HandlerFunc) http.HandlerFunc) *http.ServeMux {
 	mux := http.NewServeMux()
 	registerUI(mux, ru, token, auth)
 	mux.HandleFunc("/reload", auth(func(w http.ResponseWriter, r *http.Request) {
@@ -306,27 +323,60 @@ func startControl(ru *runner, confPath string, ui *config.UIConfig) (cleanup fun
 		io.WriteString(w, "stopping\n")
 		ru.requestStop()
 	}))
-	mux.HandleFunc("/status", auth(func(w http.ResponseWriter, r *http.Request) {
-		ru.mu.Lock()
-		addrs := make([]string, 0, len(ru.inst.Addrs))
-		for _, a := range ru.inst.Addrs {
-			addrs = append(addrs, a.Addr)
-		}
-		ru.mu.Unlock()
-		fmt.Fprintf(w, "crest/%s pid=%d listening=%s\n", version, os.Getpid(), strings.Join(addrs, ","))
+	mux.HandleFunc("/healthz", auth(func(w http.ResponseWriter, r *http.Request) {
+		writeJSON(w, map[string]any{"status": "ok"})
 	}))
+	mux.HandleFunc("/readyz", auth(func(w http.ResponseWriter, r *http.Request) {
+		ru.mu.Lock()
+		ready := ru.inst.Ready()
+		ru.mu.Unlock()
+		if !ready {
+			w.Header().Set("Content-Type", "application/json; charset=utf-8")
+			w.WriteHeader(http.StatusServiceUnavailable)
+			json.NewEncoder(w).Encode(map[string]any{"status": "not_ready"})
+			return
+		}
+		writeJSON(w, map[string]any{"status": "ready"})
+	}))
+	mux.HandleFunc("/status", auth(func(w http.ResponseWriter, r *http.Request) {
+		st := controlStatus(ru)
+		if strings.Contains(r.Header.Get("Accept"), "application/json") || r.URL.Query().Get("format") == "json" {
+			writeJSON(w, st)
+			return
+		}
+		fmt.Fprintf(w, "crest/%s pid=%d listening=%s\n", version, st["pid"], strings.Join(st["http_listeners"].([]string), ","))
+	}))
+	return mux
+}
 
-	srv := &http.Server{Handler: withIPAllowlist(mux, allow)}
-	go srv.Serve(ln)
-	url := "http://" + reachable + "/ui?token=" + token
-	fmt.Fprintf(ru.console, "crest: 管理页面 %s\n", url)
-	if ui != nil && ui.Open {
-		openBrowser(url)
+func controlStatus(ru *runner) map[string]any {
+	ru.mu.Lock()
+	inst, conf := ru.inst, ru.confPath
+	ru.mu.Unlock()
+	st := inst.Stats()
+	addrs := make([]string, 0, len(inst.Addrs))
+	by := make([]map[string]any, 0, len(inst.Addrs))
+	for _, a := range inst.Addrs {
+		addrs = append(addrs, a.Addr)
 	}
-	return func() {
-		srv.Close()
-		os.Remove(ctlPath)
-	}, nil
+	for _, a := range inst.StatsByAddr() {
+		by = append(by, map[string]any{"addr": a.Addr, "total": a.Total, "c2xx": a.C2xx, "c3xx": a.C3xx, "c4xx": a.C4xx, "c5xx": a.C5xx})
+	}
+	return map[string]any{
+		"version":          version,
+		"pid":              os.Getpid(),
+		"uptime":           int(time.Since(st.Started).Seconds()),
+		"config_path":      conf,
+		"http_listeners":   addrs,
+		"stream_listeners": inst.StreamAddrs(),
+		"ready":            inst.Ready(),
+		"total":            st.Total,
+		"c2xx":             st.C2xx,
+		"c3xx":             st.C3xx,
+		"c4xx":             st.C4xx,
+		"c5xx":             st.C5xx,
+		"by_addr":          by,
+	}
 }
 
 // compileAllowList parses ui.allow entries (IP or CIDR) into prefixes.

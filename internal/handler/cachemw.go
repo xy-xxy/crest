@@ -36,9 +36,19 @@ func WrapCache(h http.Handler, c *cache.Cache, valids []CacheValid) http.Handler
 			scheme = "https"
 		}
 		key := scheme + r.Host + r.URL.RequestURI()
-		if c.Serve(w, r, key) {
+		if c.ServeVary(w, r, key) {
 			return
 		}
+		// ReverseProxy's Director rewrites Host and URL in place. Restore the
+		// client-visible request after the downstream handler returns so a
+		// caller that reuses the request object cannot build a different cache
+		// key on its next attempt.
+		originalHost := r.Host
+		originalURL := *r.URL
+		defer func() {
+			r.Host = originalHost
+			*r.URL = originalURL
+		}()
 		rec := &cacheRecorder{ResponseWriter: w}
 		h.ServeHTTP(rec, r)
 		// Only a GET may populate the entry: a HEAD carries no body, and
@@ -48,13 +58,42 @@ func WrapCache(h http.Handler, c *cache.Cache, valids []CacheValid) http.Handler
 			return
 		}
 		if ttl := cacheTTL(rec.status, rec.header, valids); ttl > 0 && !rec.overflow && rec.wrote {
-			c.Put(key, rec.status, rec.header, rec.buf.Bytes(), ttl)
+			if vary, ok := responseVary(rec.header); ok {
+				c.Put(key, vary, r, rec.status, rec.header, rec.buf.Bytes(), ttl)
+			}
 		}
+		rec.flush()
 	})
 }
 
-// cacheRecorder tees the response into a buffer while it streams to the
-// client, snapshotting headers before downstream middleware mutates them.
+func responseVary(h http.Header) ([]string, bool) {
+	var out []string
+	for _, value := range h.Values("Vary") {
+		for _, part := range strings.Split(value, ",") {
+			name := strings.ToLower(strings.TrimSpace(part))
+			if name == "*" {
+				return nil, false
+			}
+			if name == "" {
+				continue
+			}
+			seen := false
+			for _, old := range out {
+				if old == name {
+					seen = true
+					break
+				}
+			}
+			if !seen {
+				out = append(out, name)
+			}
+		}
+	}
+	return out, true
+}
+
+// cacheRecorder captures a bounded response before releasing it to the client,
+// snapshotting headers before downstream middleware mutates them.
 type cacheRecorder struct {
 	http.ResponseWriter
 	status   int
@@ -62,6 +101,7 @@ type cacheRecorder struct {
 	buf      bytes.Buffer
 	overflow bool
 	wrote    bool
+	flushed  bool
 }
 
 func (rec *cacheRecorder) WriteHeader(code int) {
@@ -72,7 +112,6 @@ func (rec *cacheRecorder) WriteHeader(code int) {
 		rec.header = rec.Header().Clone()
 		rec.header.Del("X-Cache-Status")
 	}
-	rec.ResponseWriter.WriteHeader(code)
 }
 
 func (rec *cacheRecorder) Write(b []byte) (int, error) {
@@ -81,16 +120,36 @@ func (rec *cacheRecorder) Write(b []byte) (int, error) {
 	}
 	if !rec.overflow {
 		if rec.buf.Len()+len(b) > maxCacheableBody {
+			rec.flush()
 			rec.overflow = true
-			rec.buf.Reset()
 		} else {
-			rec.buf.Write(b)
+			return rec.buf.Write(b)
 		}
+	}
+	if !rec.flushed {
+		rec.flush()
 	}
 	return rec.ResponseWriter.Write(b)
 }
 
 func (rec *cacheRecorder) Flush() {
+	// Delay flushes until cache insertion completes. An upstream buffering
+	// layer may call Flush while the response is still being assembled.
+	if rec.overflow {
+		rec.flush()
+	}
+}
+
+func (rec *cacheRecorder) flush() {
+	if rec.flushed || !rec.wrote {
+		return
+	}
+	rec.flushed = true
+	rec.ResponseWriter.WriteHeader(rec.status)
+	if rec.buf.Len() > 0 {
+		rec.ResponseWriter.Write(rec.buf.Bytes())
+		rec.buf.Reset()
+	}
 	if f, ok := rec.ResponseWriter.(http.Flusher); ok {
 		f.Flush()
 	}
