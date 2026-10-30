@@ -1,13 +1,13 @@
 #!/usr/bin/env bash
 # 一次性构建全平台产物：Windows(带图标) + Linux amd64/arm64 + Windows 7 amd64
 # 用法: ./build.sh    （在 Git Bash / WSL / Linux 下运行）
-# 可设置 OUTPUT_DIR 指定产物目录，默认当前项目目录。
+# 可设置 OUTPUT_DIR 指定产物目录，默认 dist/ 目录。
 # Win7 使用独立 SDK，可通过 WIN7_GOROOT 指定 Go 1.20.14 安装目录。
 set -e
 cd "$(dirname "$0")"
 
 LDFLAGS="-s -w"
-OUTPUT_DIR="${OUTPUT_DIR:-.}"
+OUTPUT_DIR="${OUTPUT_DIR:-dist}"
 
 BUILDFLAGS="-trimpath"   # 不把开发机绝对路径写进二进制
 

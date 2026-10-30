@@ -26,19 +26,31 @@ import (
 	"crest/internal/server"
 )
 
-const version = "1.0.0"
+const version = "1.1.0"
 
 func main() {
-	server.Version = version
-	if addr := os.Getenv("CREST_PPROF"); addr != "" {
-		go http.ListenAndServe(addr, nil) // net/http/pprof registers on DefaultServeMux
+	if handled, err := dispatchServiceCommand(os.Args[1:], os.Stdout); handled {
+		if err != nil {
+			fmt.Fprintf(os.Stderr, "crest: %v\n", err)
+			os.Exit(1)
+		}
+		return
 	}
+	server.Version = version
 	confPath := flag.String("c", "", "path to configuration file (default: the first of "+
 		strings.Join(configNames, " / ")+" found in the working directory, then beside the executable)")
 	testOnly := flag.Bool("t", false, "test configuration and exit")
 	showVersion := flag.Bool("v", false, "print version and exit")
 	sigCmd := flag.String("s", "", "send signal to a running crest: reload, reopen, stop, status, ui")
+	flag.Usage = func() {
+		fmt.Fprintln(flag.CommandLine.Output(), "Usage: crest [options] | crest install|uninstall|start|stop|restart|status")
+		flag.PrintDefaults()
+	}
 	flag.Parse()
+	if flag.NArg() != 0 {
+		fmt.Fprintf(os.Stderr, "crest: unexpected argument %q; service commands must come first\n", flag.Arg(0))
+		os.Exit(1)
+	}
 
 	if *showVersion {
 		fmt.Printf("crest version: crest/%s\n", version)
@@ -80,23 +92,53 @@ func main() {
 		return
 	}
 
+	if err := runServer(resolved, autoFound, confErr, nil); err != nil {
+		os.Exit(1)
+	}
+}
+
+type serviceLifecycle struct {
+	stop    <-chan struct{}
+	started func(error)
+}
+
+func runServer(resolved string, autoFound bool, confErr error, lifecycle *serviceLifecycle) (runErr error) {
+	server.Version = version
+	reported := false
+	defer func() {
+		if lifecycle != nil && lifecycle.started != nil && !reported {
+			lifecycle.started(runErr)
+		}
+	}()
+
 	// runtime logs go to <exe_dir>/log: success.log / fail.log / console.log
 	opts, console, closeConsole := setupLogging()
 	defer closeConsole()
+	defer func() {
+		if runErr != nil {
+			fmt.Fprintf(console, "crest: [emerg] %v\n", runErr)
+		}
+	}()
 
 	// 此刻 console 已同时写向 stderr 与 log/console.log：双击启动若因找不到
 	// 配置而失败，窗口关掉之后仍能在 console.log 里看到找过哪些路径。
 	if confErr != nil {
-		fmt.Fprintf(console, "crest: [emerg] %v\n", confErr)
-		os.Exit(1)
+		return confErr
 	}
 	if autoFound {
 		fmt.Fprintf(console, "crest: using configuration file %s\n", resolved)
 	}
+	if lifecycle != nil {
+		if err := serviceWorkingDirectory(resolved); err != nil {
+			return err
+		}
+	}
+	if addr := os.Getenv("CREST_PPROF"); addr != "" {
+		go http.ListenAndServe(addr, nil)
+	}
 	cfg, err := loadConfig(resolved)
 	if err != nil {
-		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	for _, w := range cfg.Warnings {
 		fmt.Fprintf(console, "crest: [warn] %s\n", w)
@@ -104,38 +146,65 @@ func main() {
 
 	inst, err := server.NewWithOptions(cfg, opts)
 	if err != nil {
-		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
-		os.Exit(1)
+		return err
 	}
 	ru := &runner{confPath: resolved, inst: inst, opts: opts, console: console, ui: cfg.UI, errs: make(chan error, 8), quit: make(chan struct{})}
-	ru.watch(inst.Start())
+	var stopCtl func()
+	defer func() {
+		ru.requestStop()
+		ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+		err := ru.shutdown(ctx)
+		cancel()
+		if stopCtl != nil {
+			stopCtl()
+		}
+		if runErr == nil {
+			runErr = err
+		}
+	}()
+	errc := inst.Start()
+	select {
+	case err := <-errc:
+		return err
+	default:
+	}
+	ru.watch(errc)
 
-	stopCtl, err := startControl(ru, resolved, cfg.UI)
+	ui := cfg.UI
+	if lifecycle != nil && ui != nil {
+		copyUI := *ui
+		copyUI.Open = false
+		ui = &copyUI
+	}
+	stopCtl, err = startControl(ru, resolved, ui)
 	if err != nil {
 		fmt.Fprintf(console, "crest: [warn] control channel unavailable (-s will not work): %v\n", err)
-	} else {
-		defer stopCtl()
 	}
 
 	sigc := make(chan os.Signal, 1)
 	signal.Notify(sigc, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(sigc)
+	var stop <-chan struct{}
+	if lifecycle != nil {
+		stop = lifecycle.stop
+		if lifecycle.started != nil {
+			lifecycle.started(nil)
+			reported = true
+		}
+	}
 
 	select {
 	case err := <-ru.errs:
-		fmt.Fprintf(console, "crest: [emerg] %v\n", err)
-		os.Exit(1)
+		return err
 	case sig := <-sigc:
 		fmt.Fprintf(console, "crest: received %v, shutting down gracefully\n", sig)
+	case <-stop:
+		fmt.Fprintln(console, "crest: service stop requested, shutting down gracefully")
 	case <-ru.quit:
 		fmt.Fprintln(console, "crest: stop requested via control channel, shutting down gracefully")
 	}
 
-	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
-	defer cancel()
-	if err := ru.shutdown(ctx); err != nil {
-		fmt.Fprintf(console, "crest: shutdown: %v\n", err)
-		os.Exit(1)
-	}
+	return nil
 }
 
 // setupLogging prepares the <exe_dir>/log directory and returns server
@@ -154,7 +223,7 @@ func setupLogging() (server.Options, io.Writer, func()) {
 		fmt.Fprintf(os.Stderr, "crest: [warn] cannot open console.log: %v\n", err)
 		return server.Options{LogDir: logDir}, os.Stderr, func() {}
 	}
-	console := io.MultiWriter(os.Stderr, f)
+	console := io.MultiWriter(f, os.Stderr)
 	return server.Options{LogDir: logDir, Console: console}, console, func() { f.Close() }
 }
 
@@ -173,8 +242,15 @@ type runner struct {
 
 func (ru *runner) watch(c <-chan error) {
 	go func() {
-		if err, ok := <-c; ok {
-			ru.errs <- err
+		select {
+		case err, ok := <-c:
+			if ok {
+				select {
+				case ru.errs <- err:
+				case <-ru.quit:
+				}
+			}
+		case <-ru.quit:
 		}
 	}()
 }

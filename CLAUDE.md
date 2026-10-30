@@ -4,13 +4,13 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project
 
-crest is a single-binary nginx-compatible web server / reverse proxy in Go (no cgo, stdlib + `x/crypto` + `yaml.v3` only). It accepts both `nginx.conf` syntax and a native YAML format, and hosts a browser admin console inside the server process. `README.md` is the user-facing reference for supported directives and nginx-aligned semantics — consult it before adding or changing directive behavior.
+crest is a single-binary nginx-compatible web server / reverse proxy in Go (no cgo, stdlib + `x/crypto` + `x/sys` (Windows SCM) + `yaml.v3`). It accepts both `nginx.conf` syntax and a native YAML format, and hosts a browser admin console inside the server process. `README.md` is the user-facing reference for supported directives and nginx-aligned semantics — consult it before adding or changing directive behavior.
 
 ## Commands
 
 ```sh
-go build -o crest.exe ./cmd/crest      # cmd/crest/rsrc_windows.syso embeds the Windows icon
-./build.sh                           # all release targets: Windows + Linux amd64/arm64
+go build -o dist/crest.exe ./cmd/crest      # cmd/crest/rsrc_windows.syso embeds the Windows icon
+./build.sh                           # outputs to dist/: Windows + Win7 + Linux amd64/arm64
 
 ./crest                                          # no args: auto-detects crest.yml/.yaml/.conf (double-click case)
 go run ./cmd/crest -c crest.yml                    # run with YAML config
@@ -66,4 +66,4 @@ Default runtime logs (`Options.LogDir`, when the config sets no explicit paths) 
 - Unknown nginx directives are warned-and-ignored (`Config.warnf`), never fatal — real nginx configs should mostly run as-is.
 - Bumping the version means updating `cmd/crest/main.go` (`const version`), the README badge and version line, and both `RELEASE_NOTES_CN.md` / `RELEASE_NOTES_EN.md`.
 - Server tests are grouped as `phase2_test.go` … `phase5_test.go` by the feature batch they were added in; use `buildInstance` (nginx syntax) / `buildFromYAML` + `httptest` for new end-to-end cases.
-- Built binaries (`crest.exe`, `crest-linux-*`) are committed at the repo root; `log/`, `dist/` and `*.ctl` are gitignored.
+- Build binaries and release archives only under `dist/` (or a versioned subdirectory). Do not add root-level executables or checksum files to Git. `build.sh` defaults to `dist/` and accepts `OUTPUT_DIR`; keep `log/`, `dist/` and control files ignored.

@@ -3,3 +3,11 @@
 /log/
 /crest.yml.bak
 /crest.yml.ctl
+
+# Release binaries live in dist/, never at the repository root.
+/crest
+/crest.exe
+/crest-win7-amd64.exe
+/crest-linux-amd64
+/crest-linux-arm64
+/SHA256SUMS.txt

@@ -88,3 +88,5 @@ Go 1.26.0 与独立 Go 1.20.14 下全量与 race 测试通过；缓存/监听测
 缓存索引仍不持久化，异常退出可能留下缓存文件；FastCGI、stream TLS 终止仍为 TODO。本次没有生产网络、Windows 真机、长时间泄漏认证或无限连接攻击测试。
 
 完整指标摘要与历史失败在 `performance-results.json`，Linux 硬限制证据在 `performance-linux.json`，本机原始 RSS 时间序列保留于 `dist/perf/*.json`。
+
+发布目录说明：上述“保留根目录 exe”是 v1.0.0 验证时的状态。自 v1.1.0 起，根目录旧二进制已移除，构建和发行产物统一保存在 dist/ 并上传 GitHub Releases。

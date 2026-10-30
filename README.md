@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v1.0.0-17a2c6)
+![Version](https://img.shields.io/badge/version-v1.1.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.0.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.1.0**
 
 crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -36,6 +36,7 @@ Both parse to the exact same internal structure, so they are functionally equiva
 - [Supported directives](#supported-directives)
 - [Runtime logs](#runtime-logs)
 - [Ops commands](#ops-commands)
+- [Install as a system service](#install-as-a-system-service)
 - [Admin console](#admin-console)
 - [Linux deployment](#linux-deployment)
 - [nginx-aligned semantics](#nginx-aligned-semantics)
@@ -61,7 +62,7 @@ go run ./cmd/crest -c testdata/nginx_basic.conf
 go run ./cmd/crest -t -c crest.yml
 
 # build
-go build -o crest.exe ./cmd/crest
+go build -o dist/crest.exe ./cmd/crest
 ```
 
 ## YAML config at a glance
@@ -173,6 +174,61 @@ The token-protected control channel exposes JSON `/healthz` and `/readyz`, plus
 the compatible text `/status`. Send `Accept: application/json` or use
 `/status?format=json` for structured status data.
 
+## Install as a system service
+
+Service commands are available starting with v1.1.0. Earlier v1.0.0 archives
+do not include them.
+
+Place the executable and configuration in their permanent locations first.
+Linux uses **systemd**; Windows uses the native **Service Control Manager**
+(including the separate Win7 build). No NSSM or external service wrapper is needed.
+The fixed service name is `crest`; the default account is root on Linux and
+LocalSystem on Windows. Keep the installation directory accessible only to administrators and the service
+account: the control file and console log contain the admin token.
+
+Linux (systemd):
+
+```sh
+sudo ./crest install                       # register and enable at boot
+sudo ./crest start                         # start now
+sudo ./crest install -c /etc/crest/crest.yml --start   # install and start
+./crest status
+sudo ./crest restart
+sudo ./crest stop
+sudo ./crest uninstall                     # stop, disable and unregister
+```
+
+Windows, in an Administrator PowerShell:
+
+```powershell
+.\crest.exe install                         # register, automatic startup
+.\crest.exe start
+.\crest.exe install -c "C:\Tools\crest\crest.yml" --start
+.\crest.exe status
+.\crest.exe restart
+.\crest.exe stop
+.\crest.exe uninstall
+# With the Win7 package, substitute crest-win7-amd64.exe for crest.exe.
+```
+
+Use either `install` followed by `start`, or `install --start`; repeated installs
+are refused to avoid overwriting an existing registration. `install --dry-run`
+prints the planned executable/configuration paths without changing the system.
+Omitting `-c` uses the usual config discovery; installation records **absolute
+paths**, so service startup does not depend on the terminal's working directory.
+Service registration does not copy the executable or inherit the installing
+terminal's environment variables. The working directory is the config directory; relative paths inside configs
+continue resolving there. Do not move the executable/configuration after install;
+uninstall and reinstall to change the registered paths.
+
+`install` validates config syntax but does not bind ports. Startup failures such
+as occupied ports are reported to the service manager. Logs stay in `log/` next
+to the executable; service mode suppresses `ui.open`. `crest -s reload -c ...`
+remains available, and systemd also supports `systemctl reload crest`.
+`status` queries the OS service; `-s status` queries crest's runtime control API.
+Uninstalling leaves the executable, configuration, logs and application files in
+place. Service registration is not implemented on macOS or non-systemd Linux.
+
 ## Admin console
 
 The admin console **runs inside the crest server process** (it is the control
@@ -217,7 +273,7 @@ Pure Go, no cgo — cross-compile to a dependency-free static binary (runs on an
 distro, or a `scratch` container):
 
 ```sh
-CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o crest ./cmd/crest
+CGO_ENABLED=0 GOOS=linux GOARCH=amd64 go build -ldflags="-s -w" -o dist/crest ./cmd/crest
 # arm64: GOARCH=arm64
 ```
 
@@ -350,7 +406,7 @@ through uncached).
 ## Build
 
 ```sh
-go build -o crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the icon
+go build -o dist/crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the icon
 ./build.sh                          # Windows + Linux amd64/arm64 + Windows 7 amd64,
                                     # built with -trimpath so no absolute source
                                     # paths from the build machine get embedded
@@ -366,8 +422,10 @@ SDK. By default the script uses
 `WIN7_GOROOT=/path/to/go1.20.14 ./build.sh` to use another installation.
 The other three targets continue using `go` from PATH. No global SDK settings
 are changed; a missing or incorrect Win7 SDK stops the script before building.
-Set `OUTPUT_DIR=dist/release ./build.sh` to build all four targets without
-overwriting the existing executables at the repository root.
+Build outputs default to `dist/`. Use `OUTPUT_DIR=dist/v1.1.0 ./build.sh` for
+a versioned directory. Download packaged binaries from
+[GitHub Releases](https://github.com/xy-xxy/crest/releases); release binaries
+and checksums are no longer tracked at the repository root.
 
 ## Layout
 

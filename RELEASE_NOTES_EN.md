@@ -4,6 +4,27 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v1.1.0 — 2026-10-30
+
+- Added `install`, `start`, `stop`, `restart`, `status` and `uninstall` service
+  commands using native Windows SCM (including the Win7 build) and Linux systemd.
+- `install` validates configuration and registers automatic startup; `--start`
+  also starts immediately, and `--dry-run` only prints the plan. Use an elevated
+  Administrator terminal on Windows or root for Linux registration.
+- Registration pins absolute executable/configuration paths and the working
+  directory, handles spaces/Unicode, and refuses to overwrite existing services.
+  Uninstall stops and unregisters the service without deleting application files.
+- Native service start/stop drives the server lifecycle and reports startup
+  failures. systemd receives READY after initialization. Service mode suppresses
+  browser auto-open and writes logs to the file before attempting console output.
+- Build output now defaults to `dist/`. Removed old root-level binaries and
+  checksums; download artifacts from GitHub Releases instead.
+
+Validation covers full/race tests, real systemd lifecycle tests in an isolated
+Linux VM, and Windows/Win7 cross-compilation including Windows-specific tests.
+Actual Windows SCM registration has not been tested on a Windows machine.
+The performance bounds and known limitations documented for v1.0.0 still apply.
+
 ## v1.0.0 — 2026-10-30
 
 - Reduced connection churn under burst proxy traffic: the default upstream idle pool increases from
