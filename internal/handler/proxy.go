@@ -52,7 +52,7 @@ type ProxyOptions struct {
 	ConnectTimeout time.Duration     // 0 → 60s (proxy_connect_timeout default)
 	ReadTimeout    time.Duration     // 0 → 60s (proxy_read_timeout default)
 	SendTimeout    time.Duration     // 0 → no per-write deadline (proxy_send_timeout)
-	Keepalive      int               // idle keep-alive conns to backend; 0 → 100 default
+	Keepalive      int               // idle keep-alive conns to backend; 0 → 512 default
 	SSLVerify      bool              // proxy_ssl_verify: verify the upstream cert (default off, like nginx)
 }
 
@@ -210,8 +210,8 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 
 	// A too-small idle pool forces a new backend TCP connection per request
 	// under load (connect/close syscall storm, huge tail latency). Default to
-	// a generous 100 like nginx setups usually configure; keepalive overrides.
-	idlePerHost := 100
+	// enough to reuse a 512-request wave; keepalive explicitly overrides this.
+	idlePerHost := 512
 	if opts.Keepalive > 0 {
 		idlePerHost = opts.Keepalive
 	}
@@ -227,6 +227,10 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 			return &writeDeadlineConn{Conn: c, timeout: st}, nil
 		}
 	}
+	// Bound concurrent connection attempts, not active requests/connections.
+	// This avoids a SYN burst against the upstream on a cold pool without
+	// preventing long-lived streams from coexisting with ordinary requests.
+	dialContext = limitDials(dialContext, 16, connectTimeout)
 	ht := &http.Transport{
 		DialContext:           dialContext,
 		ResponseHeaderTimeout: readTimeout,
@@ -258,6 +262,21 @@ func NewProxy(rawURL string, opts ProxyOptions, pools map[string]upstream.Pool, 
 			io.WriteString(w, "502 Bad Gateway\n")
 		},
 	}, nil
+}
+
+func limitDials(dial func(context.Context, string, string) (net.Conn, error), limit int, timeout time.Duration) func(context.Context, string, string) (net.Conn, error) {
+	slots := make(chan struct{}, limit)
+	return func(ctx context.Context, network, address string) (net.Conn, error) {
+		ctx, cancel := context.WithTimeout(ctx, timeout)
+		defer cancel()
+		select {
+		case slots <- struct{}{}:
+			defer func() { <-slots }()
+		case <-ctx.Done():
+			return nil, ctx.Err()
+		}
+		return dial(ctx, network, address)
+	}
 }
 
 // retryTransport picks a backend per attempt and fails over on connection

@@ -988,6 +988,7 @@ func (i *Instance) Start() <-chan error {
 			errc <- fmt.Errorf("listen %s: %w", a.Addr, err)
 			continue
 		}
+		ln = queueListener(ln, acceptQueueSize)
 		i.ready.Store(true)
 		go func(a *AddrServer, ln net.Listener) {
 			var err error
@@ -1054,6 +1055,9 @@ func (i *Instance) Shutdown(ctx context.Context) error {
 	}
 	for _, al := range i.accessLogs {
 		al.Close()
+	}
+	for _, c := range i.caches {
+		c.Close()
 	}
 	if i.defaultAccess != nil {
 		// the split log is not in accessLogs; closing a cached single log

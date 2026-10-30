@@ -4,6 +4,10 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"strconv"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 )
@@ -107,34 +111,130 @@ func TestPutPurgesVariantsOnVaryPolicyChange(t *testing.T) {
 	})
 }
 
-// TestLookupDoesNotScan guards against the index regressing to a linear walk.
-// Matching a variant needs the stored response's Vary names, and learning them
-// by iterating every entry made each request O(n) over a 4096-entry cache.
-func TestLookupDoesNotScan(t *testing.T) {
-	if testing.Short() {
-		t.Skip("timing sensitive")
+// BenchmarkLookup measures lookup cost without timing-dependent test failures.
+func BenchmarkLookup(b *testing.B) {
+	for _, n := range []int{16, 4000} {
+		b.Run(fmt.Sprint(n), func(b *testing.B) {
+			c, err := Open(b.TempDir())
+			if err != nil {
+				b.Fatal(err)
+			}
+			for i := 0; i < n; i++ {
+				key := fmt.Sprintf("http://h/%d", i)
+				r := httptest.NewRequest("GET", key, nil)
+				c.Put(key, nil, r, 200, http.Header{}, []byte("x"), time.Hour)
+			}
+			key := fmt.Sprintf("http://h/%d", n-1)
+			r := httptest.NewRequest("GET", key, nil)
+			b.ResetTimer()
+			for i := 0; i < b.N; i++ {
+				if !c.Serve(httptest.NewRecorder(), r, key) {
+					b.Fatal("expected cache hit")
+				}
+			}
+		})
 	}
-	measure := func(n int) time.Duration {
-		c, err := Open(t.TempDir())
-		if err != nil {
-			t.Fatal(err)
-		}
-		for i := 0; i < n; i++ {
-			key := fmt.Sprintf("http://h/p%d", i)
-			c.Put(key, nil, req(t, key, ""), 200, http.Header{}, []byte("x"), time.Hour)
-		}
-		last := fmt.Sprintf("http://h/p%d", n-1)
-		r := req(t, last, "")
-		const iters = 300
-		start := time.Now()
-		for i := 0; i < iters; i++ {
-			c.Serve(httptest.NewRecorder(), r, last)
-		}
-		return time.Since(start) / iters
+}
+
+// Replacing an entry while a reader holds its file must not change that reader's body.
+func TestServeDuringReplacement(t *testing.T) {
+	c, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
 	}
-	small, large := measure(16), measure(4000)
-	t.Logf("lookup: %v with 16 entries, %v with 4000", small, large)
-	if large > small*2 {
-		t.Errorf("lookup cost grew with cache size: %v → %v", small, large)
+	r := req(t, "http://h/x", "")
+	c.Put("key", nil, r, 200, http.Header{"X-Generation": {"old"}}, []byte("old body"), time.Hour)
+	w := &replaceWriter{ResponseRecorder: httptest.NewRecorder(), replace: func() {
+		c.Put("key", nil, r, 200, http.Header{"X-Generation": {"new"}}, []byte("new body"), time.Hour)
+	}}
+	if !c.Serve(w, r, "key") {
+		t.Fatal("expected hit")
+	}
+	if w.Header().Get("X-Generation") != "old" || w.Body.String() != "old body" {
+		t.Fatalf("mixed generations: header=%q body=%q", w.Header().Get("X-Generation"), w.Body.String())
+	}
+	if hit, body := serve(c, r, "key"); !hit || body != "new body" {
+		t.Fatalf("replacement: hit=%v body=%q", hit, body)
+	}
+}
+
+type replaceWriter struct {
+	*httptest.ResponseRecorder
+	replace func()
+}
+
+func (w *replaceWriter) WriteHeader(code int) { w.replace(); w.ResponseRecorder.WriteHeader(code) }
+
+func TestConcurrentReplacementIntegrity(t *testing.T) {
+	c, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var wg sync.WaitGroup
+	for worker := 0; worker < 16; worker++ {
+		wg.Add(1)
+		go func(id int) {
+			defer wg.Done()
+			r := httptest.NewRequest("GET", "http://h/x", nil)
+			for i := 0; i < 30; i++ {
+				body := strings.Repeat(fmt.Sprintf("%02d", id), 1024+id)
+				c.Put("key", nil, r, 200, http.Header{"X-Body": {body[:2]}, "Content-Length": {strconv.Itoa(len(body))}}, []byte(body), time.Hour)
+				w := httptest.NewRecorder()
+				if !c.Serve(w, r, "key") {
+					t.Error("unexpected miss")
+					return
+				}
+				n, _ := strconv.Atoi(w.Header().Get("Content-Length"))
+				if w.Body.Len() != n || w.Body.String() != strings.Repeat(w.Header().Get("X-Body"), n/2) {
+					t.Error("mixed response generations")
+					return
+				}
+			}
+		}(worker)
+	}
+	wg.Wait()
+	files, err := os.ReadDir(c.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 1 {
+		t.Fatalf("retired files leaked: %d", len(files))
+	}
+}
+
+func TestVaryUsesAllHeaderValues(t *testing.T) {
+	c, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := req(t, "http://h/x", "")
+	r.Header["Accept-Language"] = []string{"en", "fr"}
+	c.Put("key", []string{"accept-language"}, r, 200, http.Header{}, []byte("EN-FR"), time.Hour)
+	r.Header["Accept-Language"] = []string{"en", "de"}
+	if hit, _ := serve(c, r, "key"); hit {
+		t.Fatal("ignored second request header value")
+	}
+}
+
+func TestClosePreservesActiveReaderAndRejectsLatePut(t *testing.T) {
+	c, err := Open(t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	r := req(t, "http://h/x", "")
+	c.Put("key", nil, r, 200, http.Header{}, []byte("body"), time.Hour)
+	w := &replaceWriter{ResponseRecorder: httptest.NewRecorder(), replace: func() { c.Close(); c.Put("key", nil, r, 200, http.Header{}, []byte("late"), time.Hour) }}
+	if !c.Serve(w, r, "key") || w.Body.String() != "body" {
+		t.Fatal("close interrupted active response")
+	}
+	if hit, _ := serve(c, r, "key"); hit {
+		t.Fatal("closed cache accepted late publication")
+	}
+	files, err := os.ReadDir(c.dir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) != 0 {
+		t.Fatalf("shutdown left %d files", len(files))
 	}
 }

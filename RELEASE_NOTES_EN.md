@@ -4,6 +4,39 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v1.0.0 — 2026-10-30
+
+- Reduced connection churn under burst proxy traffic: the default upstream idle pool increases from
+  100 to 512 connections per host; each proxy transport limits concurrent TCP
+  dials to 16, with cancellation and connect-timeout support. Active streaming
+  connections are not capped by this dial budget. Explicit `keepalive` remains
+  authoritative.
+- Added a bounded TCP accept queue (512 pending connections per HTTP listener)
+  so connection acceptance is decoupled from HTTP/TLS initialization. Shutdown
+  closes pending sockets and leaves active requests to normal graceful shutdown.
+- Bounded cache response recording to four concurrent objects across the process
+  (8 MiB body limit each). Excess misses stream uncached with `X-Cache-Status:
+  BYPASS`. Ineligible responses, SSE and HEAD misses stream without whole-body
+  buffering; HEAD misses preserve their status and headers.
+- Cached files now use immutable generations. Concurrent replacement cannot mix
+  old headers with a new body, and files are retired after their readers close.
+  Graceful shutdown cleans up this instance's cache files. Multi-value Vary
+  request headers and equivalent Vary ordering are handled consistently.
+- Removed a busy loop in the proxy buffer while waiting for the next body chunk.
+  Cache publication still precedes release of a cacheable response to the client.
+- Added a reproducible concurrency/RSS harness, regression tests and a detailed
+  [performance report](docs/performance.md), including pre-fix failures.
+- Added a separate Go 1.20.14 Windows 7 build target and `OUTPUT_DIR` support for
+  packaging without replacing existing executables or the host SDK.
+
+These are measured workload limits, not an unlimited-concurrency or fixed-RSS
+promise. `GOMEMLIMIT` is soft; configure admission limits and leave OS headroom.
+Known limits: macOS cold-start loopback bursts can still reset connections;
+Linux repeat-run P99 latency reached 4.2s, so this is not a low-latency SLO
+guarantee. Windows/Win7/Linux artifacts are cross-compiled; performance is checked on
+macOS ARM64 and an isolated Linux ARM64 VM. Win7 uses a legacy Go toolchain. Cache index persistence, FastCGI
+and stream TLS termination remain future work.
+
 ## v0.7.0
 
 Added and fixed:

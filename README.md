@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v0.7.0-17a2c6)
+![Version](https://img.shields.io/badge/version-v1.0.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v0.7.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.0.0**
 
 crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -275,6 +275,14 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
   automatically. TLS 1.2 minimum by default (`ssl_protocols` to override)
 - **gzip**: filtered by Content-Type (`text/html` always), `gzip_min_length`
   threshold, 206 / already-encoded responses skipped
+- **connection acceptance**: each HTTP listener has a bounded 512-connection
+  accept queue to absorb short bursts before HTTP/TLS initialization. This is
+  separate from active-request limits and requires OS socket/file-descriptor
+  headroom.
+- **upstream connections**: defaults to 512 idle connections per backend host
+  (explicit upstream `keepalive` overrides it). Each proxy transport admits at
+  most 16 concurrent TCP connection attempts; waiting respects request
+  cancellation and `proxy_connect_timeout`. Established streams are unaffected.
 - **load balancing**: smooth weighted round-robin default; `least_conn` (by
   active/weight ratio); `ip_hash` (client sticks to one backend, fails over)
 - **limit_req**: nginx's leaky-bucket (`rate=Nr/s|r/m`, `burst=`, `nodelay`),
@@ -283,7 +291,8 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 - **proxy_cache**: disk store + in-memory index; TTL priority is upstream
   `Cache-Control`/`Expires` > `proxy_cache_valid`; `no-store`/`private`/
   `Set-Cookie`/`Authorization` requests are not cached; responses carry
-  `X-Cache-Status: HIT|MISS`. Cold after restart (index not persisted), and
+  `X-Cache-Status: HIT|MISS|BYPASS` (`BYPASS` means the recording budget is full).
+  Cold after restart (index not persisted), and
   `Vary` selects independent variants by request header. GET and HEAD share
   entries, only GET populates them, and `Vary: *` is never cached.
 - **stream (L4)**: TCP and UDP proxying with upstream load balancing and
@@ -316,9 +325,19 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 
 ## Limitations and roadmap
 
-A buffered response holds up to `proxy_buffers` bytes of memory per in-flight
-request, so a path serving large downloads to many clients at once should size
-it deliberately (or turn buffering off for that location).
+A buffered response uses a per-request memory budget from `proxy_buffers`;
+the spooler allows up to twice that budget while handing data to disk, plus
+in-flight chunks. Size this deliberately for concurrent large downloads, or
+turn buffering off for that location. Cache misses can record at most four
+responses across the process (8 MiB body limit each); additional misses stream
+uncached. `no-store`, `Vary: *`, HEAD misses and SSE also stream directly.
+
+`GOMEMLIMIT` is a soft Go runtime target, not a hard process RSS limit. Use
+`limit_conn` to bound active requests when memory is tight; excess requests
+receive 503. Idle sockets, TLS/gzip state, headers, the OS and disk space need
+separate headroom. See [the reproducible performance report](docs/performance.md)
+for tested workloads and the connection-burst limit; it is not a guarantee for
+arbitrary concurrency, payloads or deployment hardware.
 
 Single-process, multi-goroutine model — no master/worker. One port cannot mix ssl
 and plain. Requests with a body are not retried on upstream failure (the body may
@@ -332,7 +351,7 @@ through uncached).
 
 ```sh
 go build -o crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the icon
-./build.sh                          # all targets: Windows + Linux amd64/arm64,
+./build.sh                          # Windows + Linux amd64/arm64 + Windows 7 amd64,
                                     # built with -trimpath so no absolute source
                                     # paths from the build machine get embedded
 
@@ -340,6 +359,15 @@ go build -o crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the ic
 go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows.syso \
     -png crest.png -png-size 200
 ```
+
+The Windows 7 target (`crest-win7-amd64.exe`) requires a separate Go 1.20.14
+SDK. By default the script uses
+`$HOME/.local/share/crest-build/go1.20.14/go`; set
+`WIN7_GOROOT=/path/to/go1.20.14 ./build.sh` to use another installation.
+The other three targets continue using `go` from PATH. No global SDK settings
+are changed; a missing or incorrect Win7 SDK stops the script before building.
+Set `OUTPUT_DIR=dist/release ./build.sh` to build all four targets without
+overwriting the existing executables at the repository root.
 
 ## Layout
 

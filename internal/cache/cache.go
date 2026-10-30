@@ -3,12 +3,10 @@
 package cache
 
 import (
-	"crypto/md5"
-	"encoding/hex"
 	"io"
 	"net/http"
 	"os"
-	"path/filepath"
+	"strconv"
 	"strings"
 	"sync"
 	"time"
@@ -21,12 +19,15 @@ type Cache struct {
 	varyOf     map[string][]string
 	variants   map[string]map[string]bool
 	maxEntries int
+	closed     bool
 }
 type entry struct {
 	file, base, index string
 	status            int
 	header            http.Header
 	expires, lastUse  time.Time
+	readers           int
+	retired           bool
 }
 
 func Open(dir string) (*Cache, error) {
@@ -35,42 +36,45 @@ func Open(dir string) (*Cache, error) {
 	}
 	return &Cache{dir: dir, entries: map[string]*entry{}, varyOf: map[string][]string{}, variants: map[string]map[string]bool{}, maxEntries: 4096}, nil
 }
+
 func (c *Cache) Serve(w http.ResponseWriter, r *http.Request, base string) bool {
-	return c.serve(w, r, base)
+	return c.ServeVary(w, r, base)
 }
 
-// ServeVary selects the stored variant using the response's Vary policy.
+// ServeVary opens an immutable generation while holding the index lock. Retired
+// files stay alive until their last reader closes, including on Windows.
 func (c *Cache) ServeVary(w http.ResponseWriter, r *http.Request, base string) bool {
-	return c.serve(w, r, base)
-}
-func (c *Cache) serve(w http.ResponseWriter, r *http.Request, base string) bool {
 	c.mu.Lock()
 	e := c.entries[c.indexKeyLocked(base, r)]
 	if e == nil {
 		c.mu.Unlock()
 		return false
 	}
-	now := time.Now()
-	if now.After(e.expires) {
+	if !time.Now().Before(e.expires) {
 		c.dropLocked(e)
 		c.mu.Unlock()
-		os.Remove(e.file)
 		return false
 	}
-	e.lastUse = now
-	c.mu.Unlock()
 	f, err := os.Open(e.file)
 	if err != nil {
-		c.mu.Lock()
 		c.dropLocked(e)
 		c.mu.Unlock()
 		return false
 	}
-	defer f.Close()
-	for k, vv := range e.header {
-		for _, v := range vv {
-			w.Header().Add(k, v)
+	e.readers++
+	e.lastUse = time.Now()
+	c.mu.Unlock()
+	defer func() {
+		f.Close()
+		c.mu.Lock()
+		e.readers--
+		if e.retired && e.readers == 0 {
+			os.Remove(e.file)
 		}
+		c.mu.Unlock()
+	}()
+	for k, vv := range e.header {
+		w.Header()[k] = append([]string(nil), vv...)
 	}
 	w.Header().Set("X-Cache-Status", "HIT")
 	w.WriteHeader(e.status)
@@ -79,82 +83,120 @@ func (c *Cache) serve(w http.ResponseWriter, r *http.Request, base string) bool 
 	}
 	return true
 }
+
+// Put publishes only a complete, closed file. Concurrent replacements never
+// truncate a file referenced by an earlier response or overwrite its metadata.
 func (c *Cache) Put(base string, vary []string, r *http.Request, status int, header http.Header, body []byte, ttl time.Duration) {
+	if ttl <= 0 {
+		return
+	}
 	index := base
 	if len(vary) > 0 {
 		index += "\x00" + varyKey(r, vary)
 	}
-	sum := md5.Sum([]byte(index))
-	file := filepath.Join(c.dir, hex.EncodeToString(sum[:]))
-	if err := os.WriteFile(file, body, 0644); err != nil {
+	f, err := os.CreateTemp(c.dir, "entry-")
+	if err != nil {
+		return
+	}
+	_, err = f.Write(body)
+	closeErr := f.Close()
+	if err != nil || closeErr != nil {
+		os.Remove(f.Name())
 		return
 	}
 	h := header.Clone()
 	h.Del("X-Cache-Status")
-	now := time.Now()
 	c.mu.Lock()
-	var stale []string
-	if !sameNames(c.varyOf[base], vary) {
-		stale = c.purgeLocked(base)
+	defer c.mu.Unlock()
+	if c.closed {
+		os.Remove(f.Name())
+		return
 	}
-	c.evict()
+	if !sameNames(c.varyOf[base], vary) {
+		c.purgeLocked(base)
+	}
+	if old := c.entries[index]; old != nil {
+		c.dropLocked(old)
+	} else {
+		c.evict()
+	}
 	if len(vary) > 0 {
 		c.varyOf[base] = append([]string(nil), vary...)
 	} else {
 		delete(c.varyOf, base)
 	}
-	e := &entry{file: file, base: base, index: index, status: status, header: h, expires: now.Add(ttl), lastUse: now}
-	c.entries[index] = e
+	now := time.Now()
+	c.entries[index] = &entry{file: f.Name(), base: base, index: index, status: status, header: h, expires: now.Add(ttl), lastUse: now}
 	if c.variants[base] == nil {
 		c.variants[base] = map[string]bool{}
 	}
 	c.variants[base][index] = true
-	c.mu.Unlock()
-	for _, p := range stale {
-		if p != file {
-			os.Remove(p)
-		}
+}
+
+// Close retires this instance's files without interrupting existing readers.
+// The index is not persisted, so keeping these files after shutdown has no use.
+func (c *Cache) Close() {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	c.closed = true
+	for _, e := range c.entries {
+		c.dropLocked(e)
 	}
 }
+
 func (c *Cache) indexKeyLocked(base string, r *http.Request) string {
-	if n := c.varyOf[base]; len(n) > 0 {
-		return base + "\x00" + varyKey(r, n)
+	if names := c.varyOf[base]; len(names) > 0 {
+		return base + "\x00" + varyKey(r, names)
 	}
 	return base
 }
+
 func (c *Cache) dropLocked(e *entry) {
+	if c.entries[e.index] != e {
+		return
+	}
 	delete(c.entries, e.index)
-	if s := c.variants[e.base]; s != nil {
-		delete(s, e.index)
-		if len(s) == 0 {
+	if set := c.variants[e.base]; set != nil {
+		delete(set, e.index)
+		if len(set) == 0 {
 			delete(c.variants, e.base)
 			delete(c.varyOf, e.base)
 		}
 	}
-}
-func (c *Cache) purgeLocked(base string) []string {
-	set := c.variants[base]
-	var out []string
-	for k := range set {
-		if e := c.entries[k]; e != nil {
-			out = append(out, e.file)
-			delete(c.entries, k)
-		}
+	e.retired = true
+	if e.readers == 0 {
+		os.Remove(e.file)
 	}
-	delete(c.variants, base)
-	delete(c.varyOf, base)
-	return out
 }
+
+func (c *Cache) purgeLocked(base string) {
+	for k := range c.variants[base] {
+		c.dropLocked(c.entries[k])
+	}
+}
+
 func varyKey(r *http.Request, names []string) string {
 	var b strings.Builder
-	for _, n := range names {
-		b.WriteString(strings.ToLower(n))
-		b.WriteByte('=')
-		b.WriteString(r.Header.Get(n))
-		b.WriteByte('\x00')
+	field := func(s string) {
+		b.WriteString(strconv.Itoa(len(s)))
+		b.WriteByte(':')
+		b.WriteString(s)
+	}
+	for _, name := range names {
+		field(strings.ToLower(name))
+		values := r.Header.Values(name)
+		if strings.EqualFold(name, "Host") {
+			values = []string{r.Host}
+		}
+		b.WriteString(strconv.Itoa(len(values)))
+		b.WriteByte(':')
+		for _, value := range values {
+			field(value)
+		}
 	}
 	return b.String()
 }
+
 func sameNames(a, b []string) bool {
 	if len(a) != len(b) {
 		return false
@@ -166,6 +208,7 @@ func sameNames(a, b []string) bool {
 	}
 	return true
 }
+
 func (c *Cache) evict() {
 	if len(c.entries) < c.maxEntries {
 		return
@@ -178,6 +221,5 @@ func (c *Cache) evict() {
 	}
 	if old != nil {
 		c.dropLocked(old)
-		os.Remove(old.file)
 	}
 }

@@ -313,7 +313,7 @@ func (b *bufferedWriter) drain() {
 	headerSent := false
 	for {
 		b.mu.Lock()
-		for !b.done && b.err == nil && !b.hijacked && len(b.segs) == 0 && !b.codeSet {
+		for !b.done && b.err == nil && !b.hijacked && len(b.segs) == 0 && (!b.codeSet || headerSent) {
 			b.cond.Wait()
 		}
 		if b.err != nil || b.hijacked {

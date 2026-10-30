@@ -18,7 +18,9 @@ import (
 // With proxy_buffering on the backend should finish long before the client.
 func backendHoldTime(t *testing.T, confFmt string, yaml bool) (backend, total time.Duration) {
 	t.Helper()
-	const size = 4 << 20
+	// Exceed loopback socket receive queues: a 4 MiB response can fit entirely
+	// in the kernel on macOS, making even the unbuffered control finish early.
+	const size = 32 << 20
 	body := make([]byte, size)
 	var heldMs int64
 	be := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -106,8 +108,8 @@ http:
           proxy_pass: http://%s
           proxy_buffers: {count: 8, size: 64k}
 `
-	// A 512k budget against a 4MB body pushes most of the response through the
-	// spool file, and backendHoldTime fails unless all 4MB arrive intact.
+	// A 512k budget against a 32MB body pushes most of the response through the
+	// spool file, and backendHoldTime fails unless all 32MB arrive intact.
 	// Because spooling runs on its own goroutine the backend is still released
 	// early, so the same bound applies as for the in-memory path.
 	backend, total := backendHoldTime(t, y, true)

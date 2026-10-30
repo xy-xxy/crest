@@ -1,0 +1,540 @@
+{
+  "OS": "linux",
+  "Arch": "arm64",
+  "Go": "go1.26.0",
+  "Binary": "crest 1.0.0 linux/arm64 via cgroup launcher",
+  "MemoryLimit": "128MiB",
+  "Ramp": "0s",
+  "Procs": 4,
+  "HTTPReady": false,
+  "Results": [
+    {
+      "Name": "proxy-32",
+      "Concurrent": 32,
+      "BodyBytes": 1024,
+      "Requests": 134745,
+      "Errors": 0,
+      "BackendHits": 134745,
+      "CacheHits": 0,
+      "Seconds": 10.001359128,
+      "RPS": 13472.668891847436,
+      "P50ms": 2,
+      "P95ms": 4,
+      "P99ms": 6,
+      "IdleRSSMiB": 7.84765625,
+      "PeakRSSMiB": 15.96875,
+      "AfterRSSMiB": 14.9375,
+      "ErrorExamples": null,
+      "ClientDials": 32,
+      "PeakClientConnections": 32
+    },
+    {
+      "Name": "proxy-128",
+      "Concurrent": 128,
+      "BodyBytes": 1024,
+      "Requests": 152966,
+      "Errors": 0,
+      "BackendHits": 152966,
+      "CacheHits": 0,
+      "Seconds": 10.011088339,
+      "RPS": 15279.657397896826,
+      "P50ms": 7,
+      "P95ms": 18,
+      "P99ms": 24,
+      "IdleRSSMiB": 7.953125,
+      "PeakRSSMiB": 30.41015625,
+      "AfterRSSMiB": 27.15625,
+      "ErrorExamples": null,
+      "ClientDials": 128,
+      "PeakClientConnections": 128
+    },
+    {
+      "Name": "proxy-512",
+      "Concurrent": 512,
+      "BodyBytes": 1024,
+      "Requests": 158270,
+      "Errors": 0,
+      "BackendHits": 158270,
+      "CacheHits": 0,
+      "Seconds": 10.011936896,
+      "RPS": 15808.129999624001,
+      "P50ms": 29,
+      "P95ms": 66,
+      "P99ms": 91,
+      "IdleRSSMiB": 7.8203125,
+      "PeakRSSMiB": 92.90234375,
+      "AfterRSSMiB": 71.95703125,
+      "ErrorExamples": null,
+      "ClientDials": 512,
+      "PeakClientConnections": 512
+    },
+    {
+      "Name": "direct-512",
+      "Concurrent": 512,
+      "BodyBytes": 1024,
+      "Requests": 800253,
+      "Errors": 0,
+      "BackendHits": 800253,
+      "CacheHits": 0,
+      "Seconds": 10.009172855,
+      "RPS": 79951.9612252715,
+      "P50ms": 5,
+      "P95ms": 11,
+      "P99ms": 15,
+      "IdleRSSMiB": 7.82421875,
+      "PeakRSSMiB": 7.82421875,
+      "AfterRSSMiB": 7.82421875,
+      "ErrorExamples": null,
+      "ClientDials": 581,
+      "PeakClientConnections": 581
+    },
+    {
+      "Name": "tls-128",
+      "Concurrent": 128,
+      "BodyBytes": 1024,
+      "Requests": 162060,
+      "Errors": 0,
+      "BackendHits": 162060,
+      "CacheHits": 0,
+      "Seconds": 10.005872746,
+      "RPS": 16196.4882138628,
+      "P50ms": 7,
+      "P95ms": 16,
+      "P99ms": 23,
+      "IdleRSSMiB": 8.2578125,
+      "PeakRSSMiB": 37.69921875,
+      "AfterRSSMiB": 34.58203125,
+      "ErrorExamples": null,
+      "ClientDials": 335,
+      "PeakClientConnections": 335
+    },
+    {
+      "Name": "gzip-128",
+      "Concurrent": 128,
+      "BodyBytes": 1024,
+      "Requests": 58768,
+      "Errors": 0,
+      "BackendHits": 58768,
+      "CacheHits": 0,
+      "Seconds": 10.02481646,
+      "RPS": 5862.251965857937,
+      "P50ms": 19,
+      "P95ms": 47,
+      "P99ms": 66,
+      "IdleRSSMiB": 7.81640625,
+      "PeakRSSMiB": 60.16796875,
+      "AfterRSSMiB": 22.1796875,
+      "ErrorExamples": null,
+      "ClientDials": 128,
+      "PeakClientConnections": 128
+    },
+    {
+      "Name": "static-256",
+      "Concurrent": 256,
+      "BodyBytes": 1024,
+      "Requests": 399086,
+      "Errors": 0,
+      "BackendHits": 0,
+      "CacheHits": 0,
+      "Seconds": 10.002553067,
+      "RPS": 39898.41366767127,
+      "P50ms": 4,
+      "P95ms": 19,
+      "P99ms": 30,
+      "IdleRSSMiB": 7.6484375,
+      "PeakRSSMiB": 22.45703125,
+      "AfterRSSMiB": 20.06640625,
+      "ErrorExamples": null,
+      "ClientDials": 279,
+      "PeakClientConnections": 279
+    },
+    {
+      "Name": "cache-hot-256",
+      "Concurrent": 256,
+      "BodyBytes": 1024,
+      "Requests": 362535,
+      "Errors": 0,
+      "BackendHits": 8,
+      "CacheHits": 362535,
+      "Seconds": 10.00817087,
+      "RPS": 36223.901920651355,
+      "P50ms": 6,
+      "P95ms": 18,
+      "P99ms": 23,
+      "IdleRSSMiB": 8.63671875,
+      "PeakRSSMiB": 25.12890625,
+      "AfterRSSMiB": 21.9453125,
+      "ErrorExamples": null,
+      "ClientDials": 261,
+      "PeakClientConnections": 261
+    },
+    {
+      "Name": "cache-cold-64",
+      "Concurrent": 64,
+      "BodyBytes": 4194304,
+      "Requests": 3689,
+      "Errors": 0,
+      "BackendHits": 3689,
+      "CacheHits": 0,
+      "Seconds": 10.210466358,
+      "RPS": 361.29593601859654,
+      "P50ms": 122,
+      "P95ms": 420,
+      "P99ms": 580,
+      "IdleRSSMiB": 7.9140625,
+      "PeakRSSMiB": 132.2734375,
+      "AfterRSSMiB": 67.58203125,
+      "ErrorExamples": null,
+      "ClientDials": 64,
+      "PeakClientConnections": 64
+    },
+    {
+      "Name": "no-store-64",
+      "Concurrent": 64,
+      "BodyBytes": 4194304,
+      "Requests": 2335,
+      "Errors": 0,
+      "BackendHits": 2335,
+      "CacheHits": 0,
+      "Seconds": 10.154948972,
+      "RPS": 229.9371475364613,
+      "P50ms": 121,
+      "P95ms": 1106,
+      "P99ms": 2588,
+      "IdleRSSMiB": 7.88671875,
+      "PeakRSSMiB": 107.234375,
+      "AfterRSSMiB": 34.02734375,
+      "ErrorExamples": null,
+      "ClientDials": 64,
+      "PeakClientConnections": 64
+    },
+    {
+      "Name": "slow-64",
+      "Concurrent": 64,
+      "BodyBytes": 4194304,
+      "Requests": 192,
+      "Errors": 0,
+      "BackendHits": 192,
+      "CacheHits": 0,
+      "Seconds": 12.723642338,
+      "RPS": 15.090018636140007,
+      "P50ms": 4151,
+      "P95ms": 4244,
+      "P99ms": 4326,
+      "IdleRSSMiB": 7.83203125,
+      "PeakRSSMiB": 103.07421875,
+      "AfterRSSMiB": 75.47265625,
+      "ErrorExamples": null,
+      "ClientDials": 64,
+      "PeakClientConnections": 64
+    },
+    {
+      "Name": "soak-128",
+      "Concurrent": 128,
+      "BodyBytes": 1024,
+      "Requests": 867672,
+      "Errors": 0,
+      "BackendHits": 867672,
+      "CacheHits": 0,
+      "Seconds": 60.006328,
+      "RPS": 14459.674986278113,
+      "P50ms": 7,
+      "P95ms": 19,
+      "P99ms": 27,
+      "IdleRSSMiB": 7.99609375,
+      "PeakRSSMiB": 32.7265625,
+      "AfterRSSMiB": 28.7890625,
+      "ErrorExamples": null,
+      "ClientDials": 130,
+      "PeakClientConnections": 130
+    }
+  ],
+  "Host": "Ubuntu 24.04, Linux 6.8.0-142-generic; Lima VZ; 4 vCPU, 2GiB guest RAM",
+  "ClientMaxConns": 0,
+  "Cgroups": [
+    {
+      "group": "crest-perf-1316",
+      "memory_max": 268435456,
+      "memory_peak": 101081088,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-1432",
+      "memory_max": 268435456,
+      "memory_peak": 36847616,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-1577",
+      "memory_max": 268435456,
+      "memory_peak": 11218944,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-1696",
+      "memory_max": 268435456,
+      "memory_peak": 29839360,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-1813",
+      "memory_max": 268435456,
+      "memory_peak": 100139008,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-1927",
+      "memory_max": 268435456,
+      "memory_peak": 2383872,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2038",
+      "memory_max": 268435456,
+      "memory_peak": 35397632,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2161",
+      "memory_max": 268435456,
+      "memory_peak": 68321280,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2276",
+      "memory_max": 268435456,
+      "memory_peak": 19722240,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2400",
+      "memory_max": 268435456,
+      "memory_peak": 23138304,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2515",
+      "memory_max": 268435456,
+      "memory_peak": 287948800,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 14672,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2700",
+      "memory_max": 268435456,
+      "memory_peak": 247738368,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-2881",
+      "memory_max": 268435456,
+      "memory_peak": 270438400,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 3106,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-3086",
+      "memory_max": 268435456,
+      "memory_peak": 30597120,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-3753",
+      "memory_max": 268435456,
+      "memory_peak": 111636480,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-3862",
+      "memory_max": 268435456,
+      "memory_peak": 119812096,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    },
+    {
+      "group": "crest-perf-3932",
+      "memory_max": 268435456,
+      "memory_peak": 100581376,
+      "events": {
+        "low": 0,
+        "high": 0,
+        "max": 0,
+        "oom": 0,
+        "oom_kill": 0,
+        "oom_group_kill": 0
+      }
+    }
+  ],
+  "ProductionSourceSHA256": "332c3d38d48ac4fb84136770cef8536b92bb1da544233e52cb2875c51ee36356",
+  "Repeats": [
+    {
+      "Name": "proxy-512",
+      "Concurrent": 512,
+      "BodyBytes": 1024,
+      "Requests": 88363,
+      "Errors": 0,
+      "BackendHits": 88363,
+      "CacheHits": 0,
+      "Seconds": 10.938849416,
+      "RPS": 8077.906244029056,
+      "P50ms": 38,
+      "P95ms": 105,
+      "P99ms": 189,
+      "IdleRSSMiB": 7.83984375,
+      "PeakRSSMiB": 106.53515625,
+      "AfterRSSMiB": 64.4296875,
+      "ErrorExamples": null,
+      "ClientDials": 548,
+      "PeakClientConnections": 548
+    },
+    {
+      "Name": "proxy-512",
+      "Concurrent": 512,
+      "BodyBytes": 1024,
+      "Requests": 6823,
+      "Errors": 0,
+      "BackendHits": 6823,
+      "CacheHits": 0,
+      "Seconds": 11.140204857,
+      "RPS": 612.4662955109605,
+      "P50ms": 392,
+      "P95ms": 3682,
+      "P99ms": 4177,
+      "IdleRSSMiB": 7.91796875,
+      "PeakRSSMiB": 114.515625,
+      "AfterRSSMiB": 88.00390625,
+      "ErrorExamples": null,
+      "ClientDials": 514,
+      "PeakClientConnections": 514
+    },
+    {
+      "Name": "proxy-512",
+      "Concurrent": 512,
+      "BodyBytes": 1024,
+      "Requests": 86404,
+      "Errors": 0,
+      "BackendHits": 86404,
+      "CacheHits": 0,
+      "Seconds": 10.037226069,
+      "RPS": 8608.354480214308,
+      "P50ms": 42,
+      "P95ms": 118,
+      "P99ms": 379,
+      "IdleRSSMiB": 7.77734375,
+      "PeakRSSMiB": 96.60546875,
+      "AfterRSSMiB": 80.5546875,
+      "ErrorExamples": null,
+      "ClientDials": 514,
+      "PeakClientConnections": 514
+    }
+  ]
+}

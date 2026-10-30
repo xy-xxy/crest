@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net"
 	"net/http"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -13,21 +14,23 @@ import (
 	"crest/internal/cache"
 )
 
-// CacheValid mirrors proxy_cache_valid: which statuses to cache and for how
-// long when the upstream sets no caching headers. Codes[-1] means "any".
+// CacheValid mirrors proxy_cache_valid. Codes[-1] means any status.
 type CacheValid struct {
 	Codes map[int]bool
 	TTL   time.Duration
 }
 
-// maxCacheableBody bounds what one cached object may buffer in memory.
 const maxCacheableBody = 8 << 20
 
-// WrapCache serves GETs from the cache and records cacheable misses.
+// Bound concurrent response recording across all cache zones. Each admitted
+// response holds at most 8 MiB of body data; excess misses stream uncached.
+// This is not a process RSS limit: buffers, connections and GC also use memory.
+var cacheRecordSlots = make(chan struct{}, 4)
+
+// WrapCache serves GET/HEAD hits; only GET can populate the shared entry.
 func WrapCache(h http.Handler, c *cache.Cache, valids []CacheValid) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
-		if (r.Method != http.MethodGet && r.Method != http.MethodHead) ||
-			r.Header.Get("Authorization") != "" {
+		if (r.Method != http.MethodGet && r.Method != http.MethodHead) || r.Header.Get("Authorization") != "" {
 			h.ServeHTTP(w, r)
 			return
 		}
@@ -35,82 +38,106 @@ func WrapCache(h http.Handler, c *cache.Cache, valids []CacheValid) http.Handler
 		if r.TLS != nil {
 			scheme = "https"
 		}
-		key := scheme + r.Host + r.URL.RequestURI()
+		key := scheme + "://" + r.Host + r.URL.RequestURI()
 		if c.ServeVary(w, r, key) {
 			return
 		}
-		// ReverseProxy's Director rewrites Host and URL in place. Restore the
-		// client-visible request after the downstream handler returns so a
-		// caller that reuses the request object cannot build a different cache
-		// key on its next attempt.
-		originalHost := r.Host
-		originalURL := *r.URL
+		// Select variants from the client request even if a downstream handler
+		// rewrites it. The standard ReverseProxy already clones its outbound request.
+		clientRequest := r.Clone(r.Context())
+		originalURL := r.URL
 		defer func() {
-			r.Host = originalHost
-			*r.URL = originalURL
+			r.Host = clientRequest.Host
+			r.URL = originalURL
+			*r.URL = *clientRequest.URL
 		}()
-		rec := &cacheRecorder{ResponseWriter: w}
+		rec := &cacheRecorder{ResponseWriter: w, valids: valids, allowCache: r.Method == http.MethodGet}
+		defer rec.release()
 		h.ServeHTTP(rec, r)
-		// Only a GET may populate the entry: a HEAD carries no body, and
-		// storing it under the shared key would answer later GETs with an
-		// empty 200. HEAD still reads from an entry a GET created.
-		if r.Method != http.MethodGet {
+		if rec.hijacked {
 			return
 		}
-		if ttl := cacheTTL(rec.status, rec.header, valids); ttl > 0 && !rec.overflow && rec.wrote {
-			if vary, ok := responseVary(rec.header); ok {
-				c.Put(key, vary, r, rec.status, rec.header, rec.buf.Bytes(), ttl)
-			}
+		if !rec.wrote {
+			rec.WriteHeader(http.StatusOK)
 		}
+		if rec.recording && !rec.failed {
+			c.Put(key, rec.vary, clientRequest, rec.status, rec.header, rec.buf.Bytes(), rec.ttl)
+		}
+		// Publication completes before the client can finish a cacheable response.
 		rec.flush()
 	})
 }
 
+// responseVary canonicalizes policies and rejects wildcard responses.
 func responseVary(h http.Header) ([]string, bool) {
 	var out []string
+	seen := map[string]bool{}
 	for _, value := range h.Values("Vary") {
 		for _, part := range strings.Split(value, ",") {
 			name := strings.ToLower(strings.TrimSpace(part))
 			if name == "*" {
 				return nil, false
 			}
-			if name == "" {
-				continue
-			}
-			seen := false
-			for _, old := range out {
-				if old == name {
-					seen = true
-					break
-				}
-			}
-			if !seen {
+			if name != "" && !seen[name] {
 				out = append(out, name)
+				seen[name] = true
 			}
 		}
 	}
+	sort.Strings(out)
 	return out, true
 }
 
-// cacheRecorder captures a bounded response before releasing it to the client,
-// snapshotting headers before downstream middleware mutates them.
+// cacheRecorder only buffers responses eligible for caching and admitted to
+// the shared budget. Ineligible/oversized/over-budget responses stream through.
 type cacheRecorder struct {
 	http.ResponseWriter
-	status   int
-	header   http.Header
-	buf      bytes.Buffer
-	overflow bool
-	wrote    bool
-	flushed  bool
+	valids     []CacheValid
+	allowCache bool
+	status     int
+	header     http.Header
+	vary       []string
+	ttl        time.Duration
+	buf        bytes.Buffer
+	wrote      bool
+	flushed    bool
+	recording  bool
+	slot       bool
+	failed     bool
+	hijacked   bool
 }
 
 func (rec *cacheRecorder) WriteHeader(code int) {
-	if !rec.wrote {
-		rec.wrote = true
-		rec.status = code
-		rec.Header().Set("X-Cache-Status", "MISS")
-		rec.header = rec.Header().Clone()
-		rec.header.Del("X-Cache-Status")
+	if rec.wrote {
+		return
+	}
+	if code >= 100 && code < 200 {
+		rec.ResponseWriter.WriteHeader(code)
+		return
+	}
+	rec.wrote = true
+	rec.status = code
+	rec.Header().Set("X-Cache-Status", "MISS")
+	rec.header = rec.Header().Clone()
+	rec.header.Del("X-Cache-Status")
+	rec.vary, rec.recording = responseVary(rec.header)
+	rec.ttl = cacheTTL(code, rec.header, rec.valids)
+	rec.recording = rec.recording && rec.allowCache && rec.ttl > 0 && rec.header.Get("Trailer") == "" &&
+		!strings.HasPrefix(strings.ToLower(rec.header.Get("Content-Type")), "text/event-stream")
+	if n, err := strconv.ParseInt(rec.header.Get("Content-Length"), 10, 64); err == nil && n > maxCacheableBody {
+		rec.recording = false
+	}
+	if rec.recording {
+		select {
+		case cacheRecordSlots <- struct{}{}:
+			rec.slot = true
+		default:
+			rec.recording = false
+			rec.Header().Set("X-Cache-Status", "BYPASS")
+		}
+	}
+	if !rec.recording {
+		rec.flush()
 	}
 }
 
@@ -118,25 +145,30 @@ func (rec *cacheRecorder) Write(b []byte) (int, error) {
 	if !rec.wrote {
 		rec.WriteHeader(http.StatusOK)
 	}
-	if !rec.overflow {
-		if rec.buf.Len()+len(b) > maxCacheableBody {
-			rec.flush()
-			rec.overflow = true
-		} else {
+	if rec.recording {
+		if rec.buf.Len()+len(b) <= maxCacheableBody {
 			return rec.buf.Write(b)
 		}
-	}
-	if !rec.flushed {
+		rec.recording = false
 		rec.flush()
+		rec.release()
 	}
-	return rec.ResponseWriter.Write(b)
+	n, err := rec.ResponseWriter.Write(b)
+	if err != nil {
+		rec.failed = true
+	}
+	return n, err
 }
 
 func (rec *cacheRecorder) Flush() {
-	// Delay flushes until cache insertion completes. An upstream buffering
-	// layer may call Flush while the response is still being assembled.
-	if rec.overflow {
+	if !rec.wrote {
+		rec.WriteHeader(http.StatusOK)
+	}
+	if !rec.recording {
 		rec.flush()
+		if f, ok := rec.ResponseWriter.(http.Flusher); ok {
+			f.Flush()
+		}
 	}
 }
 
@@ -147,16 +179,25 @@ func (rec *cacheRecorder) flush() {
 	rec.flushed = true
 	rec.ResponseWriter.WriteHeader(rec.status)
 	if rec.buf.Len() > 0 {
-		rec.ResponseWriter.Write(rec.buf.Bytes())
-		rec.buf.Reset()
+		if _, err := rec.ResponseWriter.Write(rec.buf.Bytes()); err != nil {
+			rec.failed = true
+		}
+		rec.buf = bytes.Buffer{}
 	}
-	if f, ok := rec.ResponseWriter.(http.Flusher); ok {
-		f.Flush()
+}
+
+func (rec *cacheRecorder) release() {
+	if rec.slot {
+		<-cacheRecordSlots
+		rec.slot = false
 	}
 }
 
 func (rec *cacheRecorder) Hijack() (net.Conn, *bufio.ReadWriter, error) {
-	rec.overflow = true // hijacked responses are not cacheable
+	rec.recording = false
+	rec.hijacked = true
+	rec.buf = bytes.Buffer{}
+	rec.release()
 	if hj, ok := rec.ResponseWriter.(http.Hijacker); ok {
 		return hj.Hijack()
 	}
