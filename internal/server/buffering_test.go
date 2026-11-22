@@ -87,9 +87,15 @@ http {
 	// Compare the two rather than testing an absolute fraction: kernel socket
 	// buffers absorb a few MB even unbuffered, and the race detector skews
 	// wall-clock numbers. What must hold is that buffering frees the backend
-	// while the client is still receiving.
-	if bufBackend*4 >= rawBackend {
-		t.Errorf("buffering did not release the backend earlier: on=%v off=%v", bufBackend, rawBackend)
+	// while the client is still receiving. The comparison needs a control the
+	// client actually paced: Windows loopback buffers absorbed the whole 32 MiB
+	// unbuffered response in ~6ms on CI, leaving nothing to compare against.
+	if rawBackend > rawTotal/2 {
+		if bufBackend*4 >= rawBackend {
+			t.Errorf("buffering did not release the backend earlier: on=%v off=%v", bufBackend, rawBackend)
+		}
+	} else {
+		t.Logf("unbuffered control was not paced by the client here (socket buffers held the body); checking buffering alone")
 	}
 	if bufBackend > bufTotal/5 {
 		t.Errorf("buffered backend still paced by the client: %v of %v", bufBackend, bufTotal)
