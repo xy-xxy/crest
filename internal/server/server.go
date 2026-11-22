@@ -4,6 +4,7 @@ import (
 	"compress/gzip"
 	"context"
 	"crypto/tls"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -12,6 +13,7 @@ import (
 	"path/filepath"
 	"sort"
 	"strings"
+	"sync"
 	"sync/atomic"
 	"time"
 
@@ -45,6 +47,14 @@ type Instance struct {
 	caches        map[string]*cache.Cache
 	streams       []*stream.Server
 	maps          []compiledMap
+	proxies       []http.Handler // from handler.NewProxy; idle upstream conns closed on Shutdown
+
+	// handoffMu guards what a reload moves between instances: sockets, and
+	// which caches this instance owns (and so closes on Shutdown).
+	handoffMu      sync.Mutex
+	sockets        map[socketKey]*boundSocket // bound sockets this instance still owns
+	prev           *Instance                  // set by NewReplacing until StartReplacing
+	borrowedCaches map[string]bool            // zones reused from prev; owned once started
 
 	started time.Time
 	ready   atomic.Bool
@@ -117,6 +127,7 @@ type AddrServer struct {
 	group   *hostGroup
 	inst    *Instance
 	http    *http.Server
+	view    *listenerView // what http accepts from; closing it keeps the socket
 	tlsConf *tls.Config
 
 	stTotal, st2xx, st3xx, st4xx, st5xx int64 // atomic request counters
@@ -139,6 +150,16 @@ func New(cfg *config.Config) (*Instance, error) {
 }
 
 func NewWithOptions(cfg *config.Config, opts Options) (*Instance, error) {
+	return NewReplacing(cfg, opts, nil)
+}
+
+// NewReplacing builds an instance to start with StartReplacing(prev). Zones
+// whose definition is unchanged keep prev's live state, as nginx keeps shared
+// memory zones across a reload: the proxy_cache index and files, limit_req
+// buckets, and limit_conn counts, which include requests prev is still
+// draining. prev keeps owning its caches until StartReplacing succeeds, so a
+// rejected reload leaves them intact. prev must not be shut down meanwhile.
+func NewReplacing(cfg *config.Config, opts Options, prev *Instance) (*Instance, error) {
 	h := cfg.HTTP
 	errPath, errLevel := "", "error"
 	if h != nil {
@@ -160,7 +181,7 @@ func NewWithOptions(cfg *config.Config, opts Options) (*Instance, error) {
 	} else if errLog, err = logging.OpenError(errPath, level); err != nil {
 		return nil, err
 	}
-	inst := &Instance{cfg: cfg, opts: opts, errLog: errLog, accessLogs: map[string]*logging.AccessLog{}, started: time.Now()}
+	inst := &Instance{cfg: cfg, opts: opts, errLog: errLog, accessLogs: map[string]*logging.AccessLog{}, started: time.Now(), prev: prev}
 	if h != nil {
 		if _, err := inst.setupHTTP(h); err != nil {
 			return nil, err
@@ -216,17 +237,33 @@ func (inst *Instance) setupHTTP(h *config.HTTP) (*Instance, error) {
 	inst.reqLimiters = map[string]*limiter.ReqLimiter{}
 	inst.reqZoneKeys = map[string]*vars.Template{}
 	for name, z := range h.LimitReqZones {
-		inst.reqLimiters[name] = limiter.NewReq(z.Rate)
+		l := inst.prev.keptReqZone(name, z)
+		if l == nil {
+			l = limiter.NewReq(z.Rate)
+		}
+		inst.reqLimiters[name] = l
 		inst.reqZoneKeys[name] = vars.Parse(z.Key)
 	}
 	inst.connLimiters = map[string]*limiter.ConnLimiter{}
 	inst.connZoneKeys = map[string]*vars.Template{}
 	for name, z := range h.LimitConnZones {
-		inst.connLimiters[name] = limiter.NewConn()
+		l := inst.prev.keptConnZone(name, z)
+		if l == nil {
+			l = limiter.NewConn()
+		}
+		inst.connLimiters[name] = l
 		inst.connZoneKeys[name] = vars.Parse(z.Key)
 	}
 	inst.caches = map[string]*cache.Cache{}
 	for name, dir := range h.CachePaths {
+		if c := inst.prev.keptCache(name, dir); c != nil {
+			inst.caches[name] = c
+			if inst.borrowedCaches == nil {
+				inst.borrowedCaches = map[string]bool{}
+			}
+			inst.borrowedCaches[name] = true
+			continue
+		}
 		c, err := cache.Open(dir)
 		if err != nil {
 			return nil, fmt.Errorf("proxy_cache_path %q: %w", dir, err)
@@ -375,6 +412,7 @@ func (i *Instance) buildVHost(sv *config.Server, pools map[string]upstream.Pool)
 		return nil, err
 	}
 	v := &vhost{cfg: sv, locs: locs, names: names, serverHeader: serverHeaderValue(h.ServerTokens, sv.ServerTokens)}
+	v.blockActuator = resolveBlockActuator(h.BlockActuator, sv.BlockActuator)
 	v.rewrites, err = compileRewrites(sv.Rewrites)
 	if err != nil {
 		return nil, err
@@ -620,6 +658,9 @@ func (i *Instance) buildHandler(loc *config.Location, sv *config.Server, pools m
 		// proxy_ssl_verify: default off (like nginx); nearest scope wins
 		opts.SSLVerify = boolOr(loc.ProxySSLVerify, sv.ProxySSLVerify, i.cfg.HTTP.ProxySSLVerify)
 		h, err := handler.NewProxy(loc.ProxyPass, opts, pools, i.errLog)
+		if err == nil {
+			i.proxies = append(i.proxies, h)
+		}
 		return h, nil, err
 	}
 	r := loc.Root
@@ -833,12 +874,17 @@ func (a *AddrServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		r = vars.WithExtras(r, nil)
 	}
 	v := a.group.match(r.Host)
+	var protectActuator bool
 	if v != nil {
 		rw.serverHeader = v.serverHeader
+		protectActuator = v.blockActuator
 	} else {
 		rw.serverHeader = serverHeaderValue(a.inst.cfg.HTTP.ServerTokens)
+		protectActuator = resolveBlockActuator(a.inst.cfg.HTTP.BlockActuator, nil)
 	}
 	switch {
+	case protectActuator && blockActuator(rw, r):
+		// Keep denied requests in the normal statistics and access-log path.
 	case v == nil:
 		http.NotFound(rw, r)
 	case len(v.errorPages) > 0:
@@ -909,6 +955,9 @@ func (a *AddrServer) dispatch(v *vhost, w http.ResponseWriter, r *http.Request) 
 		return
 	}
 	for cycle := 0; cycle < 10; cycle++ {
+		if v.blockActuator && blockActuator(w, r) {
+			return
+		}
 		rt := v.locs.match(r.URL.Path)
 		if rt == nil {
 			http.NotFound(w, r)
@@ -922,6 +971,9 @@ func (a *AddrServer) dispatch(v *vhost, w http.ResponseWriter, r *http.Request) 
 			return
 		case rwChanged:
 			continue
+		}
+		if v.blockActuator && blockActuator(w, r) {
+			return
 		}
 		if len(rt.tryFiles) > 0 {
 			uri, code, redo, named := rt.resolveTryFiles(r)
@@ -942,6 +994,9 @@ func (a *AddrServer) dispatch(v *vhost, w http.ResponseWriter, r *http.Request) 
 			if redo {
 				continue
 			}
+			if v.blockActuator && blockActuator(w, r) {
+				return
+			}
 		}
 		rt.handler.ServeHTTP(w, r)
 		return
@@ -958,6 +1013,9 @@ func (a *AddrServer) serveErrorPage(v *vhost, w http.ResponseWriter, r *http.Req
 	r2.URL.Path = uri
 	r2.URL.RawQuery = ""
 	r2.RequestURI = uri
+	if v.blockActuator && blockActuator(w, r2) {
+		return
+	}
 	sw := &statusOverrideWriter{ResponseWriter: w, code: code}
 	if rt := v.locs.match(uri); rt != nil {
 		rt.handler.ServeHTTP(sw, r2)
@@ -966,30 +1024,95 @@ func (a *AddrServer) serveErrorPage(v *vhost, w http.ResponseWriter, r *http.Req
 	http.Error(w, fmt.Sprintf("%d %s", code, http.StatusText(code)), code)
 }
 
-// Start launches all listeners; fatal listen errors arrive on the channel.
+// Start binds all listeners and serves. A bind failure leaves nothing bound
+// and is delivered on the channel immediately; later fatal serve errors
+// arrive on it too.
 func (i *Instance) Start() <-chan error {
-	errc := make(chan error, len(i.Addrs)+len(i.streams))
+	errc, err := i.StartReplacing(nil)
+	if err != nil {
+		failed := make(chan error, 1)
+		failed <- err
+		return failed
+	}
+	return errc
+}
+
+// StartReplacing starts i in place of old, the running instance (nil at
+// startup). Sockets on addresses both configs listen on move from old to i
+// while they stay bound, so a reload never refuses connections on them.
+// Addresses only i listens on are bound first: if any bind fails, everything
+// i bound is closed, old is left untouched and still serving, and the error
+// is returned. On success old has stopped accepting and the caller drains it
+// with old.Shutdown, which also closes the sockets i did not take over.
+func (i *Instance) StartReplacing(old *Instance) (<-chan error, error) {
+	if i.prev != nil && i.prev != old {
+		return nil, errors.New("server: instance was built by NewReplacing for a different predecessor")
+	}
+	needs, err := i.socketNeeds()
+	if err != nil {
+		return nil, err
+	}
+	if old != nil {
+		old.handoffMu.Lock()
+		defer old.handoffMu.Unlock()
+	}
+	inherited := func(k socketKey) *boundSocket {
+		if old == nil {
+			return nil
+		}
+		return old.sockets[k]
+	}
+	fresh := make(map[socketKey]*boundSocket, len(needs))
+	for _, n := range needs {
+		if inherited(n.key) != nil {
+			continue
+		}
+		b, err := bindSocket(n.key)
+		if err != nil {
+			for _, f := range fresh {
+				f.close()
+			}
+			return nil, n.errorf("%w", err)
+		}
+		fresh[n.key] = b
+	}
+
+	// Nothing below can fail. Stop old first so every connection accepted
+	// from here on is served with the new configuration.
+	if old != nil {
+		old.stopAcceptingLocked()
+	}
+	i.handoffMu.Lock()
+	defer i.handoffMu.Unlock()
+	if old != nil {
+		for name := range i.borrowedCaches {
+			delete(old.caches, name) // now i's to close; old's routes keep using it while draining
+		}
+	}
+	i.borrowedCaches = nil
+	i.prev = nil // do not keep the whole chain of replaced instances alive
+	i.sockets = make(map[socketKey]*boundSocket, len(needs))
+	for _, n := range needs {
+		b := fresh[n.key]
+		if b == nil {
+			b = old.sockets[n.key]
+			delete(old.sockets, n.key)
+		}
+		i.sockets[n.key] = b
+	}
+
+	errc := make(chan error, len(needs))
 	for _, st := range i.streams {
-		if err := st.Start(); err != nil {
-			errc <- fmt.Errorf("stream listen %s: %w", st.Addr(), err)
+		b := i.sockets[streamKey(st)]
+		if b.pc != nil {
+			st.ServePacket(b.pc)
 		} else {
-			i.ready.Store(true)
+			st.Serve(b.ln.view())
 		}
 	}
 	for _, a := range i.Addrs {
 		a.http = &http.Server{Addr: a.Addr, Handler: a, TLSConfig: a.tlsConf}
-		// Bind IPv4-only by default (like nginx's "listen <port>"), so a
-		// loopback client does not arrive as ::1 and get forwarded upstream
-		// as an X-Real-IP that IPv4-only code cannot parse. An explicit IPv6
-		// literal (e.g. "[::]:80") still binds IPv6.
-		network := listenNetwork(a.Addr)
-		ln, err := net.Listen(network, a.Addr)
-		if err != nil {
-			errc <- fmt.Errorf("listen %s: %w", a.Addr, err)
-			continue
-		}
-		ln = queueListener(ln, acceptQueueSize)
-		i.ready.Store(true)
+		a.view = i.sockets[httpKey(a)].ln.view()
 		go func(a *AddrServer, ln net.Listener) {
 			var err error
 			if a.tlsConf != nil {
@@ -999,12 +1122,17 @@ func (i *Instance) Start() <-chan error {
 				i.errLog.Logf(logging.LevelInfo, "listening on %s", a.Addr)
 				err = a.http.Serve(ln)
 			}
-			if err != nil && err != http.ErrServerClosed {
+			// After a handoff or Shutdown the view reports ErrClosed; only a
+			// failure of a live instance is fatal.
+			if err != nil && err != http.ErrServerClosed && !i.closed.Load() {
 				errc <- fmt.Errorf("listen %s: %w", a.Addr, err)
 			}
-		}(a, ln)
+		}(a, a.view)
 	}
-	return errc
+	if len(needs) > 0 {
+		i.ready.Store(true)
+	}
+	return errc, nil
 }
 
 // listenNetwork chooses the socket family for a listen address. A bare port
@@ -1039,12 +1167,25 @@ func (i *Instance) Reopen() error {
 	return first
 }
 
+// Shutdown stops accepting, closes the sockets i still owns (none that a
+// successor took over), then waits up to ctx for in-flight requests.
 func (i *Instance) Shutdown(ctx context.Context) error {
-	i.closed.Store(true)
-	var first error
-	for _, st := range i.streams {
-		st.Close()
+	i.handoffMu.Lock()
+	i.stopAcceptingLocked()
+	sockets := i.sockets
+	i.sockets = nil
+	var caches []*cache.Cache // owned ones: not handed to a successor, not still borrowed
+	for name, c := range i.caches {
+		if !i.borrowedCaches[name] {
+			caches = append(caches, c)
+		}
 	}
+	i.caches = nil
+	i.handoffMu.Unlock()
+	for _, b := range sockets {
+		b.close()
+	}
+	var first error
 	for _, a := range i.Addrs {
 		if a.http == nil {
 			continue
@@ -1053,10 +1194,15 @@ func (i *Instance) Shutdown(ctx context.Context) error {
 			first = err
 		}
 	}
+	// After the drain, so in-flight requests keep their connections. Any that
+	// finish after a drain timeout return to the pool and expire normally.
+	for _, p := range i.proxies {
+		handler.CloseIdleConnections(p)
+	}
 	for _, al := range i.accessLogs {
 		al.Close()
 	}
-	for _, c := range i.caches {
+	for _, c := range caches {
 		c.Close()
 	}
 	if i.defaultAccess != nil {

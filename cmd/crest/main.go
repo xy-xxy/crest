@@ -26,7 +26,7 @@ import (
 	"crest/internal/server"
 )
 
-const version = "1.1.0"
+const version = "1.2.0"
 
 func main() {
 	if handled, err := dispatchServiceCommand(os.Args[1:], os.Stdout); handled {
@@ -238,7 +238,13 @@ type runner struct {
 	errs     chan error
 	quit     chan struct{}
 	stopOnce sync.Once
+	draining sync.WaitGroup // instances replaced by reload, finishing in-flight requests
 }
+
+// drainTimeout bounds how long a replaced instance waits for in-flight
+// requests before releasing its logs and caches. It no longer delays the
+// reload itself: the new instance is already serving.
+const drainTimeout = 5 * time.Second
 
 func (ru *runner) watch(c <-chan error) {
 	go func() {
@@ -255,9 +261,10 @@ func (ru *runner) watch(c <-chan error) {
 	}()
 }
 
-// reload builds a full new instance first, so a broken config never takes
-// down the running one. The port handoff is not zero-downtime: old listeners
-// must close before the new ones can bind.
+// reload builds and starts a complete new instance before retiring the old
+// one, so neither a broken config nor a port that fails to bind takes down the
+// running server. Unchanged listen addresses keep their sockets (no refusal
+// window); the old instance stops accepting and drains in the background.
 // reload returns a human-facing note (shown to the -s reload client) plus any
 // fatal error. The note carries warnings the client should see, notably that
 // ui-section changes need a full restart.
@@ -274,17 +281,34 @@ func (ru *runner) reload() (note string, err error) {
 		note = "注意：ui 段已变更，但控制通道在进程启动时固定，需完全重启（-s stop 后重新启动）才生效"
 		fmt.Fprintln(ru.console, "crest: [warn] "+note)
 	}
-	ni, err := server.NewWithOptions(cfg, ru.opts)
+	// Build under the lock: ni reuses the running instance's unchanged zones
+	// (cache, limit_req, limit_conn), so that instance must stay current until
+	// ni replaces it. This also serializes concurrent reloads.
+	ru.mu.Lock()
+	defer ru.mu.Unlock()
+	old := ru.inst
+	ni, err := server.NewReplacing(cfg, ru.opts, old)
 	if err != nil {
 		return "", err
 	}
-	ru.mu.Lock()
-	defer ru.mu.Unlock()
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	ru.inst.Shutdown(ctx)
-	cancel()
+	errc, err := ni.StartReplacing(old)
+	if err != nil {
+		// The running instance is untouched, including the caches ni was
+		// borrowing; release only what ni opened.
+		ctx, cancel := context.WithTimeout(context.Background(), time.Second)
+		ni.Shutdown(ctx)
+		cancel()
+		return "", fmt.Errorf("%w (the running configuration is unchanged)", err)
+	}
 	ru.inst = ni
-	ru.watch(ni.Start())
+	ru.watch(errc)
+	ru.draining.Add(1)
+	go func() {
+		defer ru.draining.Done()
+		ctx, cancel := context.WithTimeout(context.Background(), drainTimeout)
+		defer cancel()
+		old.Shutdown(ctx)
+	}()
 	fmt.Fprintln(ru.console, "crest: configuration reloaded")
 	return note, nil
 }
@@ -292,7 +316,17 @@ func (ru *runner) reload() (note string, err error) {
 func (ru *runner) shutdown(ctx context.Context) error {
 	ru.mu.Lock()
 	defer ru.mu.Unlock()
-	return ru.inst.Shutdown(ctx)
+	err := ru.inst.Shutdown(ctx)
+	drained := make(chan struct{})
+	go func() {
+		ru.draining.Wait()
+		close(drained)
+	}()
+	select {
+	case <-drained:
+	case <-ctx.Done():
+	}
+	return err
 }
 
 func (ru *runner) requestStop() {

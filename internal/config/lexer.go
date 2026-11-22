@@ -1,6 +1,9 @@
 package config
 
-import "fmt"
+import (
+	"fmt"
+	"strings"
+)
 
 type tokenType int
 
@@ -14,9 +17,48 @@ const (
 
 type token struct {
 	typ    tokenType
-	val    string
+	val    string // with nginx escapes resolved (nginxUnescape)
 	line   int
 	quoted bool
+	// literal keeps backslashes as written, except \\ and an escaped closing
+	// quote inside quotes. Path directives use it (see pathDirectives).
+	literal string
+}
+
+// nginxUnescape resolves the escapes nginx's config reader handles in every
+// argument, quoted or not (ngx_conf_read_token): \" \' and \\ yield the
+// character, \t \r \n the control character. Any other backslash is kept, so
+// regexes such as \d or \. reach the regex engine unchanged.
+func nginxUnescape(s string) string {
+	if !strings.Contains(s, `\`) {
+		return s
+	}
+	var b strings.Builder
+	b.Grow(len(s))
+	for i := 0; i < len(s); i++ {
+		if s[i] == '\\' && i+1 < len(s) {
+			switch s[i+1] {
+			case '"', '\'', '\\':
+				b.WriteByte(s[i+1])
+				i++
+				continue
+			case 't':
+				b.WriteByte('\t')
+				i++
+				continue
+			case 'r':
+				b.WriteByte('\r')
+				i++
+				continue
+			case 'n':
+				b.WriteByte('\n')
+				i++
+				continue
+			}
+		}
+		b.WriteByte(s[i])
+	}
+	return b.String()
 }
 
 func lex(src string) ([]token, error) {
@@ -37,24 +79,25 @@ func lex(src string) ([]token, error) {
 				i++
 			}
 		case c == '{':
-			toks = append(toks, token{tokOpenBrace, "{", line, false})
+			toks = append(toks, token{typ: tokOpenBrace, val: "{", line: line})
 			i++
 		case c == '}':
-			toks = append(toks, token{tokCloseBrace, "}", line, false})
+			toks = append(toks, token{typ: tokCloseBrace, val: "}", line: line})
 			i++
 		case c == ';':
-			toks = append(toks, token{tokSemicolon, ";", line, false})
+			toks = append(toks, token{typ: tokSemicolon, val: ";", line: line})
 			i++
 		case c == '"' || c == '\'':
 			quote := c
 			start := line
 			i++
-			var sb []rune
+			var sb, raw []rune // raw: the text between the quotes, as written
 			closed := false
 			for i < len(rs) {
 				ch := rs[i]
 				if ch == '\\' && i+1 < len(rs) && (rs[i+1] == quote || rs[i+1] == '\\') {
 					sb = append(sb, rs[i+1])
+					raw = append(raw, ch, rs[i+1])
 					i += 2
 					continue
 				}
@@ -67,12 +110,13 @@ func lex(src string) ([]token, error) {
 					line++
 				}
 				sb = append(sb, ch)
+				raw = append(raw, ch)
 				i++
 			}
 			if !closed {
 				return nil, fmt.Errorf("line %d: unterminated quoted string", start)
 			}
-			toks = append(toks, token{tokWord, string(sb), start, true})
+			toks = append(toks, token{typ: tokWord, val: nginxUnescape(string(raw)), line: start, quoted: true, literal: string(sb)})
 		default:
 			start := i
 			for i < len(rs) {
@@ -83,9 +127,10 @@ func lex(src string) ([]token, error) {
 				}
 				i++
 			}
-			toks = append(toks, token{tokWord, string(rs[start:i]), line, false})
+			word := string(rs[start:i])
+			toks = append(toks, token{typ: tokWord, val: nginxUnescape(word), line: line, literal: word})
 		}
 	}
-	toks = append(toks, token{tokEOF, "", line, false})
+	toks = append(toks, token{typ: tokEOF, line: line})
 	return toks, nil
 }

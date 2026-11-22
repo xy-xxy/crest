@@ -9,8 +9,9 @@
 // 输出多分辨率(16/32/48/64/128/256)的 PNG 打包成 ICO(Vista+ 支持 PNG 嵌入)。
 //
 // 用法:
-//   go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows.syso \
+//   go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows_amd64.syso \
 //       -png crest.png -png-size 200
+//   go run ./tools/genicon -o cmd/crest/crest.ico -arch 386 -syso cmd/crest/rsrc_windows_386.syso
 
 package main
 
@@ -18,6 +19,7 @@ import (
 	"bytes"
 	"encoding/binary"
 	"flag"
+	"fmt"
 	"image"
 	"image/color"
 	"image/png"
@@ -29,7 +31,8 @@ func main() {
 	out := flag.String("o", "crest.ico", "输出 .ico 路径")
 	pngOut := flag.String("png", "", "额外输出一个 PNG（用于 README，如 crest.png）")
 	pngSize := flag.Int("png-size", 256, "PNG 边长")
-	sysoOut := flag.String("syso", "", "输出 Windows 资源对象（如 cmd/crest/rsrc_windows.syso）")
+	sysoOut := flag.String("syso", "", "输出 Windows 资源对象（如 cmd/crest/rsrc_windows_amd64.syso）")
+	arch := flag.String("arch", "amd64", "Windows 资源对象架构：amd64 或 386")
 	flag.Parse()
 
 	sizes := []int{16, 32, 48, 64, 128, 256}
@@ -43,12 +46,20 @@ func main() {
 		pngs = append(pngs, buf.Bytes())
 	}
 	ico := buildICO(sizes, pngs)
+	var syso []byte
+	if *sysoOut != "" {
+		var err error
+		syso, err = buildSYSO(sizes, pngs, *arch)
+		if err != nil {
+			panic(err)
+		}
+	}
 	if err := os.WriteFile(*out, ico, 0644); err != nil {
 		panic(err)
 	}
 
 	if *sysoOut != "" {
-		if err := os.WriteFile(*sysoOut, buildSYSO(sizes, pngs), 0644); err != nil {
+		if err := os.WriteFile(*sysoOut, syso, 0644); err != nil {
 			panic(err)
 		}
 	}
@@ -228,7 +239,7 @@ func buildICO(sizes []int, pngs [][]byte) []byte {
 // ---- Windows 资源对象（.syso）----------------------------------------
 //
 // Windows exe 的图标并不来自 .ico 文件，而来自链接进二进制的 COFF 资源对象
-// rsrc_windows.syso。这里手写该对象，省去 rsrc / goversioninfo 这类外部工具
+// rsrc_windows_<arch>.syso。这里手写该对象，省去 rsrc / goversioninfo 这类外部工具
 // ——与项目"无外部依赖"的原则一致，也让图标能随 genicon 一起重建。
 //
 // 结构：COFF 头 + 一个 .rsrc 节 + 重定位表 + 符号表。节内是标准的 PE 资源树：
@@ -242,9 +253,19 @@ const (
 	rtGroupIcon   = 14
 	langNeutral   = 0x0409
 	imgRelAmd64NB = 0x0003 // IMAGE_REL_AMD64_ADDR32NB
+	imgRelI386NB  = 0x0007 // IMAGE_REL_I386_DIR32NB
 )
 
-func buildSYSO(sizes []int, pngs [][]byte) []byte {
+func buildSYSO(sizes []int, pngs [][]byte, arch string) ([]byte, error) {
+	var machine, relocation uint16
+	switch arch {
+	case "amd64":
+		machine, relocation = 0x8664, imgRelAmd64NB
+	case "386":
+		machine, relocation = 0x014c, imgRelI386NB
+	default:
+		return nil, fmt.Errorf("unsupported Windows resource architecture %q (want amd64 or 386)", arch)
+	}
 	n := len(sizes)
 
 	// ---- 先排布节内偏移 ----
@@ -341,7 +362,7 @@ func buildSYSO(sizes []int, pngs [][]byte) []byte {
 	relocPtr := secDataPtr + sectionSize
 	symPtr := relocPtr + numReloc*relocSize
 
-	w(uint16(0x8664)) // Machine: AMD64（build.sh 只出 windows/amd64）
+	w(machine)        // Machine: AMD64 或 I386
 	w(uint16(1))      // NumberOfSections
 	w(uint32(0))      // TimeDateStamp
 	w(uint32(symPtr)) // PointerToSymbolTable
@@ -365,7 +386,7 @@ func buildSYSO(sizes []int, pngs [][]byte) []byte {
 	for i := 0; i <= n; i++ {
 		w(uint32(dataEntryOff[i])) // 要修正的字段位置
 		w(uint32(0))               // 符号表索引：.rsrc 节符号
-		w(uint16(imgRelAmd64NB))
+		w(relocation)
 	}
 
 	buf.Write([]byte(".rsrc\x00\x00\x00"))
@@ -376,7 +397,7 @@ func buildSYSO(sizes []int, pngs [][]byte) []byte {
 	w(uint8(0))  // NumberOfAuxSymbols
 	w(uint32(4)) // 字符串表：仅长度字段
 
-	return buf.Bytes()
+	return buf.Bytes(), nil
 }
 
 // buildGroupIcon 生成 RT_GROUP_ICON 资源（GRPICONDIR）。它与 .ico 的目录几乎

@@ -16,9 +16,10 @@ func (i *Instance) wrapLimitReq(h http.Handler, use *config.LimitReqUse) (http.H
 		return nil, fmt.Errorf("unknown limit_req zone %q", use.Zone)
 	}
 	keyT := i.reqZoneKeys[use.Zone]
+	rate := i.cfg.HTTP.LimitReqZones[use.Zone].Rate // this config's rate; the buckets may be shared with a reload successor
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		key := keyT.Expand(vars.Request(r))
-		ok, delay := l.Take(key, use.Burst)
+		ok, delay := l.TakeAt(key, rate, use.Burst)
 		if !ok {
 			i.errLog.Logf(logging.LevelWarn, "limiting requests, zone %q, client %q", use.Zone, key)
 			http.Error(w, "503 Service Temporarily Unavailable", http.StatusServiceUnavailable)

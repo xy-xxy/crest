@@ -113,7 +113,7 @@ func TestStreamUDP(t *testing.T) {
 		}
 	}()
 
-	listen := freeAddr(t)
+	listen := freeUDPAddr(t) // a free TCP port can still be taken for UDP
 	conf := fmt.Sprintf(`
 stream {
     server {

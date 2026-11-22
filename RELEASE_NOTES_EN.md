@@ -4,6 +4,50 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v1.2.0 — 2026-11-22
+
+- HTTP listeners now reject decoded paths matching `(?i)(^|/)actuator([/;]|$)`
+  with `403 Forbidden` by default, including internal rewrites, try_files and
+  error-page redirects. No per-site rule is needed; access logs and statistics
+  are retained. This covers TLS terminated by crest, not stream TLS passthrough.
+- Added `block_actuator`, enabled by default, with http-level defaults and
+  per-server overrides applied on config reload. YAML uses `true/false`, while
+  nginx syntax uses `on/off`. Disabling it does not override manual deny rules.
+- Added the Windows 7 32-bit target `crest-win7-386.exe` to every default build,
+  using the independent Go 1.20.14 toolchain (x86/SSE2). The existing four targets
+  and host SDK remain unchanged.
+- Split Windows icon resources by amd64/386 architecture and added `-arch` to
+  the icon generator.
+- Fixed: when a reload added a listen address that failed to bind (for example,
+  an occupied port), crest replied "reloaded" and then the whole process exited,
+  taking unchanged ports down too. The reload now fails with an error and the
+  running configuration keeps serving.
+- Fixed: reload no longer refuses connections. Addresses present in both
+  configs (HTTP, stream TCP and UDP) hand their bound sockets to the new
+  instance inside the process. The old instance stops accepting at once and
+  finishes in-flight requests in the background for up to 5s, without delaying
+  the reload. Previously the port could stay closed for up to 5s. `80`, `*:80`
+  and `0.0.0.0:80` count as the same address.
+- Fixed: reload no longer empties `proxy_cache` or resets rate limiting. As in
+  nginx, zones with an unchanged definition keep their state: the cache index
+  and files, `limit_req` buckets (a changed `rate` drains the existing buckets
+  at the new rate) and `limit_conn` counts, which include requests the old
+  instance is still finishing, so concurrency no longer exceeds the limit while
+  it drains. A zone whose key or cache directory changed starts empty, and a
+  rejected reload leaves the running cache untouched. Passive upstream health
+  (`max_fails`) still starts fresh, matching nginx's per-worker state.
+- After a reload, the old instance closes its idle upstream keep-alive
+  connections once its requests drain, instead of keeping them for the 90s idle
+  timeout, so frequent reloads no longer pile up upstream connections.
+- Fixed: nginx config string escapes now match nginx. In every argument, quoted
+  or not, `\n` `\t` `\r` become newline, tab and carriage return, and `\"` `\'`
+  `\\` become the character. Previously they were output literally: for example,
+  `return 200 "ok\n"` returned the four characters `ok\n`, and a `log_format`
+  separated by `\t` wrote a literal `\t`. Regex escapes such as `\d` and `\.` are
+  unaffected. Path directives (`root`, `alias`, `access_log`, `error_log`,
+  certificates, `auth_basic_user_file`, `proxy_cache_path`) keep backslashes as
+  written, so Windows paths like `C:\nginx\html` keep working.
+
 ## v1.1.0 — 2026-10-30
 
 - Added `install`, `start`, `stop`, `restart`, `status` and `uninstall` service

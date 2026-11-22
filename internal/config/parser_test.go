@@ -110,3 +110,63 @@ func TestParseErrors(t *testing.T) {
 		}
 	}
 }
+
+// nginx's config reader (ngx_conf_read_token) resolves these escapes in every
+// argument, quoted or not; any other backslash is kept as written.
+func TestParseEscapesMatchNginx(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`return 200 "ok\n";`, "ok\n"},
+		{`return 200 'a\tb\r\n';`, "a\tb\r\n"},
+		{`return 200 ok\n;`, "ok\n"},               // unquoted too
+		{`return 200 "it\'s";`, "it's"},            // the other quote
+		{`return 200 'say \"hi\"';`, `say "hi"`},   // the other quote
+		{`return 200 "a\\nb";`, `a\nb`},            // \\ first, then a plain n
+		{`return 200 a\\b;`, `a\b`},                // unquoted \\
+		{`return 200 "\d+\.php\$";`, `\d+\.php\$`}, // regex escapes untouched
+		{`return 200 "trailing\\";`, `trailing\`},  //
+		{`return 200 "\x";`, `\x`},                 // unknown escape kept
+		{`return 200 "多字节\t文本";`, "多字节\t文本"},       // UTF-8 around an escape
+	}
+	for _, c := range cases {
+		ds, err := Parse(c.src)
+		if err != nil {
+			t.Errorf("%s: %v", c.src, err)
+			continue
+		}
+		if got := ds[0].Args[1]; got != c.want {
+			t.Errorf("%s: got %q, want %q", c.src, got, c.want)
+		}
+	}
+}
+
+// Windows users write paths with backslashes, which nginx itself would mangle
+// (\n, \t, \r). Path directives keep them as written, as before.
+func TestParsePathDirectivesKeepBackslashes(t *testing.T) {
+	cases := []struct{ src, want string }{
+		{`root C:\nginx\html;`, `C:\nginx\html`},
+		{`alias "D:\tools\release\";`, ``}, // see below: \" escapes the quote
+		{`alias "D:\tools\release\\";`, `D:\tools\release\`},
+		{`access_log C:\logs\new.log;`, `C:\logs\new.log`},
+		{`error_log "C:\temp\err.log" warn;`, `C:\temp\err.log`},
+		{`ssl_certificate \\fileserver\certs\site.crt;`, `\\fileserver\certs\site.crt`},
+		{`ssl_certificate_key "\\\\fileserver\\certs\\site.key";`, `\\fileserver\certs\site.key`},
+		{`auth_basic_user_file C:\nginx\htpasswd;`, `C:\nginx\htpasswd`},
+		{`proxy_cache_path C:\nginx\cache keys_zone=c:1m;`, `C:\nginx\cache`},
+	}
+	for _, c := range cases {
+		ds, err := Parse(c.src)
+		if c.want == "" {
+			if err == nil {
+				t.Errorf("%s: want an unterminated-string error", c.src)
+			}
+			continue
+		}
+		if err != nil {
+			t.Errorf("%s: %v", c.src, err)
+			continue
+		}
+		if got := ds[0].Args[0]; got != c.want {
+			t.Errorf("%s: got %q, want %q", c.src, got, c.want)
+		}
+	}
+}

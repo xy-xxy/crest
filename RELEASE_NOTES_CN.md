@@ -2,6 +2,40 @@
 
 本项目遵循语义化版本。
 
+## v1.2.0 — 2026-11-22
+
+- HTTP 默认拦截匹配 `(?i)(^|/)actuator([/;]|$)` 的已解码请求路径，返回
+  `403 Forbidden`，无需逐站点配置。覆盖内部重写、try_files 和错误页跳转，
+  保留访问日志及统计；适用于 crest 终止的 HTTPS，不适用于 stream HTTPS 直通。
+- 新增 `block_actuator` 开关，默认开启；可在 http 级统一设置、在 server 级覆盖，
+  支持配置重载。YAML 使用 `true/false`，nginx 语法使用 `on/off`；关闭内置检查
+  不会取消手写的拒绝规则。
+- 默认构建增加 Windows 7 32 位版本 `crest-win7-386.exe`，使用独立的
+  Go 1.20.14 工具链（x86/SSE2），保留原有四个构建目标和主机 SDK。
+- Windows 图标资源按 amd64/386 分开，图标生成工具新增 `-arch` 参数。
+- 修复：reload 新增的监听端口绑定失败（如端口被占用）时，原先会先回复
+  “reloaded”，随后整个进程退出，未改动的端口也一起停止服务。现在 reload
+  直接返回错误，正在运行的配置继续服务。
+- 修复：reload 期间不再拒绝连接。新旧配置共有的监听地址（HTTP、stream
+  TCP/UDP）在进程内直接交接已绑定的 socket；旧实例立即停止接收新连接，
+  在后台最多用 5 秒处理完在途请求，reload 不再等它（原先端口最多关闭 5 秒）。
+  `80`、`*:80`、`0.0.0.0:80` 视为同一地址。
+- 修复：reload 不再清空 `proxy_cache`，也不再重置限流状态。与 nginx 一致，
+  定义未变的 zone 保留状态：缓存索引和文件、`limit_req` 计数（改了 `rate`
+  时沿用现有计数、按新速率计算）、`limit_conn` 计数（包含旧实例尚未处理完的
+  请求，排空期间实际并发不再超过上限）。key 或缓存目录变化的 zone 从零开始；
+  被拒绝的 reload 不会影响正在运行的缓存。上游被动健康状态（`max_fails`）
+  仍会重置，与 nginx 按 worker 保存的行为相同。
+- reload 后，旧实例处理完在途请求即主动关闭上游空闲长连接，不再保留到 90 秒
+  空闲超时，频繁 reload 时上游连接不会成倍堆积。
+- 修复：nginx 配置字符串的转义与 nginx 对齐。所有参数（无论是否加引号）中的
+  `\n` `\t` `\r` 转为换行、制表符、回车，`\"` `\'` `\\` 转为对应字符；
+  原先它们按字面输出，例如 `return 200 "ok\n"` 返回 `ok\n` 四个字符，
+  `log_format` 中以 `\t` 分隔的日志写成字面 `\t`。正则中的 `\d`、`\.` 不受影响。
+  路径类指令（`root`、`alias`、`access_log`、`error_log`、证书、
+  `auth_basic_user_file`、`proxy_cache_path`）保持原样，`C:\nginx\html`
+  这类 Windows 路径照常可用。
+
 ## v1.1.0 — 2026-10-30
 
 - 新增 `install / start / stop / restart / status / uninstall` 服务管理命令。

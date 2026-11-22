@@ -2,6 +2,7 @@
 package stream
 
 import (
+	"errors"
 	"fmt"
 	"net"
 	"strings"
@@ -21,8 +22,9 @@ type Server struct {
 	target string
 	errlog *logging.ErrorLog
 
-	ln     net.Listener
-	pc     net.PacketConn
+	ln     net.Listener   // owned by the caller (server.Instance)
+	pc     net.PacketConn // owned by the caller (server.Instance)
+	done   chan struct{}  // closed when the accept/read loop exits
 	closed atomic.Bool
 }
 
@@ -56,34 +58,50 @@ func netFamily(proto, addr string) string {
 	return proto + "4"
 }
 
-func (s *Server) Start() error {
+// Network is the socket family to bind: "tcp4", "tcp6", "udp4" or "udp6".
+func (s *Server) Network() string {
 	if s.cfg.UDP {
-		pc, err := net.ListenPacket(netFamily("udp", s.cfg.Addr), s.cfg.Addr)
-		if err != nil {
-			return err
-		}
-		s.pc = pc
-		s.errlog.Logf(logging.LevelInfo, "stream: listening on %s (udp)", s.cfg.Addr)
-		go s.serveUDP()
-		return nil
+		return netFamily("udp", s.cfg.Addr)
 	}
-	ln, err := net.Listen(netFamily("tcp", s.cfg.Addr), s.cfg.Addr)
-	if err != nil {
-		return err
-	}
-	s.ln = ln
-	s.errlog.Logf(logging.LevelInfo, "stream: listening on %s (tcp)", s.cfg.Addr)
-	go s.serveTCP()
-	return nil
+	return netFamily("tcp", s.cfg.Addr)
 }
 
+// Serve proxies TCP connections accepted from ln. The caller owns the socket:
+// Close stops this server only, so a reload can keep the port bound.
+func (s *Server) Serve(ln net.Listener) {
+	s.ln = ln
+	s.done = make(chan struct{})
+	s.errlog.Logf(logging.LevelInfo, "stream: listening on %s (tcp)", s.cfg.Addr)
+	go s.serveTCP()
+}
+
+// ServePacket proxies datagrams read from pc, which the caller owns. It may be
+// a socket a previous server was reading, so its Close deadline is cleared.
+func (s *Server) ServePacket(pc net.PacketConn) {
+	pc.SetReadDeadline(time.Time{})
+	s.pc = pc
+	s.done = make(chan struct{})
+	s.errlog.Logf(logging.LevelInfo, "stream: listening on %s (udp)", s.cfg.Addr)
+	go s.serveUDP()
+}
+
+// Close stops accepting connections and reading datagrams, and returns once
+// the loop has exited. It does not close the socket. Established TCP
+// connections and UDP sessions continue until they end on their own; session
+// replies still go out through the socket while it stays open.
 func (s *Server) Close() {
-	s.closed.Store(true)
+	if !s.closed.CompareAndSwap(false, true) {
+		return
+	}
 	if s.ln != nil {
 		s.ln.Close()
 	}
 	if s.pc != nil {
-		s.pc.Close()
+		// A past deadline wakes ReadFrom without closing the shared socket.
+		s.pc.SetReadDeadline(time.Unix(1, 0))
+	}
+	if s.done != nil {
+		<-s.done
 	}
 }
 
@@ -115,10 +133,11 @@ func (s *Server) dial(proto string) (net.Conn, *upstream.Backend, error) {
 }
 
 func (s *Server) serveTCP() {
+	defer close(s.done)
 	for {
 		c, err := s.ln.Accept()
 		if err != nil {
-			if s.closed.Load() {
+			if s.closed.Load() || errors.Is(err, net.ErrClosed) {
 				return
 			}
 			s.errlog.Logf(logging.LevelError, "stream: accept on %s: %v", s.cfg.Addr, err)
@@ -170,6 +189,7 @@ type udpSession struct {
 }
 
 func (s *Server) serveUDP() {
+	defer close(s.done)
 	var mu sync.Mutex
 	sessions := map[string]*udpSession{}
 	buf := make([]byte, 64*1024)

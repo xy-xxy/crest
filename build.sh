@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# 一次性构建全平台产物：Windows(带图标) + Linux amd64/arm64 + Windows 7 amd64
+# 一次性构建全平台产物：Windows(带图标) + Linux amd64/arm64 + Windows 7 amd64/386
 # 用法: ./build.sh    （在 Git Bash / WSL / Linux 下运行）
 # 可设置 OUTPUT_DIR 指定产物目录，默认 dist/ 目录。
 # Win7 使用独立 SDK，可通过 WIN7_GOROOT 指定 Go 1.20.14 安装目录。
@@ -32,7 +32,7 @@ esac
 mkdir -p "$OUTPUT_DIR"
 
 echo "==> Windows amd64 (crest.exe, 带图标)"
-# rsrc_windows.syso 会被 windows 构建自动嵌入
+# rsrc_windows_<arch>.syso 会按 Windows 目标架构自动嵌入
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 go build $BUILDFLAGS -ldflags "$LDFLAGS" -o "$OUTPUT_DIR/crest.exe" ./cmd/crest
 
 echo "==> Linux amd64 (crest-linux-amd64)"
@@ -44,6 +44,9 @@ CGO_ENABLED=0 GOOS=linux GOARCH=arm64 go build $BUILDFLAGS -ldflags "$LDFLAGS" -
 echo "==> Windows 7 amd64 (crest-win7-amd64.exe, Go 1.20.14)"
 CGO_ENABLED=0 GOOS=windows GOARCH=amd64 GOAMD64=v1 win7_go build $BUILDFLAGS -ldflags "$LDFLAGS" -o "$OUTPUT_DIR/crest-win7-amd64.exe" ./cmd/crest
 
+echo "==> Windows 7 386 (crest-win7-386.exe, Go 1.20.14)"
+CGO_ENABLED=0 GOOS=windows GOARCH=386 GO386=sse2 win7_go build $BUILDFLAGS -ldflags "$LDFLAGS" -o "$OUTPUT_DIR/crest-win7-386.exe" ./cmd/crest
+
 echo ""
 echo "构建完成："
-ls -la "$OUTPUT_DIR/crest.exe" "$OUTPUT_DIR/crest-linux-amd64" "$OUTPUT_DIR/crest-linux-arm64" "$OUTPUT_DIR/crest-win7-amd64.exe" | awk '{printf "  %-22s %8.1f MB\n", $NF, $5/1048576}'
+ls -la "$OUTPUT_DIR/crest.exe" "$OUTPUT_DIR/crest-linux-amd64" "$OUTPUT_DIR/crest-linux-arm64" "$OUTPUT_DIR/crest-win7-amd64.exe" "$OUTPUT_DIR/crest-win7-386.exe" | awk '{printf "  %-22s %8.1f MB\n", $NF, $5/1048576}'

@@ -147,3 +147,46 @@ func TestQueuedListenerTLS(t *testing.T) {
 		t.Fatalf("TLS through accept queue: %q %v", body, err)
 	}
 }
+
+func TestListenerViewCloseKeepsSocketForNextView(t *testing.T) {
+	base := newStubListener()
+	q := queueListener(base, 2)
+	defer q.Close()
+	first := q.view()
+	blocked := make(chan error, 1)
+	go func() {
+		_, err := first.Accept()
+		blocked <- err
+	}()
+	first.Close()
+	select {
+	case err := <-blocked:
+		if !errors.Is(err, net.ErrClosed) {
+			t.Fatalf("Accept on closed view: %v", err)
+		}
+	case <-time.After(time.Second):
+		t.Fatal("closing a view did not unblock its Accept")
+	}
+	select {
+	case <-base.done:
+		t.Fatal("closing a view closed the shared socket")
+	default:
+	}
+
+	// A connection that arrives after the handoff reaches the next view.
+	a, b := net.Pipe()
+	defer b.Close()
+	base.incoming <- accepted{conn: a}
+	next := q.view()
+	got, err := next.Accept()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got != a {
+		t.Fatal("next view received a different connection")
+	}
+	got.Close()
+	if _, err := first.Accept(); !errors.Is(err, net.ErrClosed) {
+		t.Fatalf("closed view accepted again: %v", err)
+	}
+}

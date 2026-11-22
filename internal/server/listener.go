@@ -73,14 +73,22 @@ func (q *queuedListener) receive() {
 		}
 	}
 }
-func (q *queuedListener) Accept() (net.Conn, error) {
+func (q *queuedListener) Accept() (net.Conn, error) { return q.accept(nil) }
+
+// accept waits for a queued connection. done, when non-nil, ends the wait for
+// one listenerView without closing the shared socket.
+func (q *queuedListener) accept(done <-chan struct{}) (net.Conn, error) {
 	select {
 	case <-q.stop:
+		return nil, net.ErrClosed
+	case <-done:
 		return nil, net.ErrClosed
 	default:
 	}
 	select {
 	case <-q.stop:
+		return nil, net.ErrClosed
+	case <-done:
 		return nil, net.ErrClosed
 	case a, ok := <-q.pending:
 		if !ok {
@@ -100,6 +108,27 @@ func (q *queuedListener) Accept() (net.Conn, error) {
 		return a.conn, a.err
 	}
 }
+
+// view returns a listener that accepts from q's queue. Closing the view stops
+// only the server using it; the socket and queued connections stay open, so a
+// reload can give the same socket to the next instance with no refusal window.
+func (q *queuedListener) view() *listenerView {
+	return &listenerView{q: q, done: make(chan struct{})}
+}
+
+type listenerView struct {
+	q    *queuedListener
+	done chan struct{}
+	once sync.Once
+}
+
+func (v *listenerView) Accept() (net.Conn, error) { return v.q.accept(v.done) }
+func (v *listenerView) Addr() net.Addr            { return v.q.Addr() }
+func (v *listenerView) Close() error {
+	v.once.Do(func() { close(v.done) })
+	return nil
+}
+
 func (q *queuedListener) Close() error {
 	q.once.Do(func() {
 		close(q.stop)

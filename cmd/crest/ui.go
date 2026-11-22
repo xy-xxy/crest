@@ -586,6 +586,7 @@ stream:
 
       <details><summary>http 全局</summary>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
+      <tr><td>block_actuator</td><td>内置 actuator 拦截，默认 true；false 关闭，各 server 可覆盖</td><td>block_actuator: false</td></tr>
       <tr><td>access_log</td><td>访问日志；不写则自动分流到 log/success.log 与 log/error.log</td><td>{path: a.log, format: main} 或 {off: true}</td></tr>
       <tr><td>log_formats</td><td>自定义日志格式（内置 combined）</td><td>main: '$remote_addr $status'</td></tr>
       <tr><td>gzip</td><td>压缩开关/类型/阈值/级别</td><td>{enabled: true, min_length: 1k}</td></tr>
@@ -603,11 +604,13 @@ stream:
       <tr><td>ssl_certificate(_key)</td><td>PEM 证书 + 私钥；多 server 自动按 SNI 选择；TLS 下自动启用 HTTP/2</td><td>ssl_certificate: cert.pem</td></tr>
       <tr><td>ssl_protocols</td><td>允许的 TLS 版本（缺省最低 TLSv1.2）</td><td>[TLSv1.2, TLSv1.3]</td></tr>
       <tr><td>server_tokens</td><td>Server 响应头：true 带版本 / false 仅 crest</td><td>server_tokens: false</td></tr>
+      <tr><td>block_actuator</td><td>覆盖此站点的内置 actuator 拦截开关；不写则继承 http；不影响手写的拒绝规则</td><td>block_actuator: false</td></tr>
       <tr><td>error_pages</td><td>自定义错误页（仅拦截 crest 自身错误，上游错误透传）</td><td>[{codes: [502,503], uri: /50x.html}]</td></tr>
       <tr><td>rewrites</td><td>server 级重写，location 匹配前执行</td><td>见 location</td></tr>
       <tr><td>locations</td><td>路由规则列表</td><td></td></tr></table></details>
 
       <details><summary>locations（路由列表）</summary>
+      <p>HTTP 默认拦截路径中的 actuator 段（不区分大小写，后接 /、; 或路径结尾），返回 403 Forbidden，无需重复配置。可在 http 或 server 设置 block_actuator: false 关闭；手写的 403 规则仍生效。内部重写后仍检查；不适用于 stream HTTPS 直通。</p>
       <table><tr><th>字段</th><th>说明</th><th>示例</th></tr>
       <tr><td>path + match</td><td>匹配方式：prefix(默认) / exact / regex / regex_i / prefix_priority（对应 nginx 空 / = / ~ / ~* / ^~）</td><td>{path: /ping, match: exact}</td></tr>
       <tr><td>path: "@名字"</td><td>命名 location，仅由 try_files 跳转进入</td><td>try_files: [$uri, "@backend"]</td></tr>

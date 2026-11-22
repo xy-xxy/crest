@@ -26,6 +26,13 @@ func NewReq(rate float64) *ReqLimiter {
 // Take reports whether a request under key passes with the given burst, and
 // the pacing delay to apply when the caller is not in nodelay mode.
 func (l *ReqLimiter) Take(key string, burst float64) (ok bool, delay time.Duration) {
+	return l.TakeAt(key, l.rate, burst)
+}
+
+// TakeAt is Take with the drain rate supplied by the caller. A zone kept
+// across a reload keeps its buckets while each config applies its own rate,
+// as nginx does with a limit_req_zone whose rate changed.
+func (l *ReqLimiter) TakeAt(key string, rate, burst float64) (ok bool, delay time.Duration) {
 	l.mu.Lock()
 	defer l.mu.Unlock()
 	now := time.Now()
@@ -35,7 +42,7 @@ func (l *ReqLimiter) Take(key string, burst float64) (ok bool, delay time.Durati
 		l.buckets[key] = &reqBucket{last: now}
 		return true, 0
 	}
-	excess := b.excess - l.rate*now.Sub(b.last).Seconds() + 1
+	excess := b.excess - rate*now.Sub(b.last).Seconds() + 1
 	if excess < 0 {
 		excess = 0
 	}
@@ -45,7 +52,7 @@ func (l *ReqLimiter) Take(key string, burst float64) (ok bool, delay time.Durati
 	}
 	b.excess = excess
 	b.last = now
-	return true, time.Duration(excess / l.rate * float64(time.Second))
+	return true, time.Duration(excess / rate * float64(time.Second))
 }
 
 // sweep drops idle buckets so the map cannot grow unbounded.

@@ -12,15 +12,16 @@ import (
 )
 
 type vhost struct {
-	cfg          *config.Server
-	locs         *locationSet
-	names        []nameMatcher
-	accessLog    logging.AccessLogger
-	accessSet    bool // server-level access_log present (incl. "off")
-	rewrites     []*rewriteRule
-	cert         *tls.Certificate
-	errorPages   map[int]string
-	serverHeader string // Server header value per server_tokens
+	cfg           *config.Server
+	locs          *locationSet
+	names         []nameMatcher
+	accessLog     logging.AccessLogger
+	accessSet     bool // server-level access_log present (incl. "off")
+	rewrites      []*rewriteRule
+	cert          *tls.Certificate
+	errorPages    map[int]string
+	serverHeader  string // Server header value per server_tokens
+	blockActuator bool   // resolved http/server setting, default on
 }
 
 type nameKind int

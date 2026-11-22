@@ -76,6 +76,7 @@ type yamlHTTP struct {
 	Maps           []yamlMap                   `yaml:"maps"`
 	Servers        []*yamlServer               `yaml:"servers"`
 	ServerTokens   *bool                       `yaml:"server_tokens"`
+	BlockActuator  *bool                       `yaml:"block_actuator"`
 	SSLProtocols   []string                    `yaml:"ssl_protocols"`
 }
 
@@ -157,6 +158,7 @@ type yamlServer struct {
 	LimitConn     *yamlLimitConn   `yaml:"limit_conn"`
 	Locations     []*yamlLocation  `yaml:"locations"`
 	ServerTokens  *bool            `yaml:"server_tokens"`
+	BlockActuator *bool            `yaml:"block_actuator"`
 	SSLProtocols  []string         `yaml:"ssl_protocols"`
 	ValidReferers []string         `yaml:"valid_referers"`
 }
@@ -391,6 +393,7 @@ func (yh *yamlHTTP) convert(cfg *Config) (*HTTP, error) {
 		return nil, err
 	}
 	h.ServerTokens = yh.ServerTokens
+	h.BlockActuator = yh.BlockActuator
 	if len(yh.SSLProtocols) > 0 {
 		if err := validateSSLProtocols(yh.SSLProtocols); err != nil {
 			return nil, err
@@ -464,6 +467,7 @@ func (ys *yamlServer) convert() (*Server, error) {
 		return nil, err
 	}
 	s.ServerTokens = ys.ServerTokens
+	s.BlockActuator = ys.BlockActuator
 	if len(ys.SSLProtocols) > 0 {
 		if err := validateSSLProtocols(ys.SSLProtocols); err != nil {
 			return nil, err

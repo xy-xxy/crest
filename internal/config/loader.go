@@ -73,6 +73,7 @@ type HTTP struct {
 	ProxyMaxTempFile    *int64 // proxy_max_temp_file_size; 0 disables the spill
 	Expires             *Expires
 	ServerTokens        *bool
+	BlockActuator       *bool // nil = default on
 	SSLProtocols        []string
 	LimitRate           *int64 // bytes/sec, 0 = unlimited
 	LimitRateAfter      *int64 // bytes sent before limiting starts
@@ -185,6 +186,7 @@ type Server struct {
 	ProxyMaxTempFile    *int64 // proxy_max_temp_file_size; 0 disables the spill
 	Expires             *Expires
 	ServerTokens        *bool
+	BlockActuator       *bool // nil = inherit from http
 	SSLProtocols        []string
 	LimitRate           *int64
 	LimitRateAfter      *int64
@@ -616,6 +618,12 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 				return nil, err
 			}
 			h.ServerTokens = b
+		case "block_actuator":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			h.BlockActuator = b
 		case "ssl_protocols":
 			if err := validateSSLProtocols(d.Args); err != nil {
 				return nil, errDirective(d, err.Error())
@@ -832,6 +840,12 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 				return nil, err
 			}
 			s.ServerTokens = b
+		case "block_actuator":
+			b, err := parseOnOff(d)
+			if err != nil {
+				return nil, err
+			}
+			s.BlockActuator = b
 		case "ssl_protocols":
 			if err := validateSSLProtocols(d.Args); err != nil {
 				return nil, errDirective(d, err.Error())

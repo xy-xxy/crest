@@ -279,12 +279,30 @@ func limitDials(dial func(context.Context, string, string) (net.Conn, error), li
 	}
 }
 
+// CloseIdleConnections closes the idle upstream connections of a handler from
+// NewProxy (other handlers are ignored). An instance replaced by a reload calls
+// it once its requests have drained, rather than leaving the connections open
+// until IdleConnTimeout.
+func CloseIdleConnections(h http.Handler) {
+	if rp, ok := h.(*httputil.ReverseProxy); ok {
+		if c, ok := rp.Transport.(interface{ CloseIdleConnections() }); ok {
+			c.CloseIdleConnections()
+		}
+	}
+}
+
 // retryTransport picks a backend per attempt and fails over on connection
 // errors, like a minimal proxy_next_upstream.
 type retryTransport struct {
 	pool   upstream.Pool
 	base   http.RoundTripper
 	errlog *logging.ErrorLog
+}
+
+func (t *retryTransport) CloseIdleConnections() {
+	if c, ok := t.base.(interface{ CloseIdleConnections() }); ok {
+		c.CloseIdleConnections()
+	}
 }
 
 func (t *retryTransport) RoundTrip(req *http.Request) (*http.Response, error) {

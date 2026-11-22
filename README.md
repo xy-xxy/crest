@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v1.1.0-17a2c6)
+![Version](https://img.shields.io/badge/version-v1.2.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.1.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.2.0**
 
 crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -113,8 +113,8 @@ After starting, visit <http://localhost:8080/> (static page) and
 | Context | Directives |
 |---|---|
 | main | `http` `stream` (`events` / `worker_processes` etc. are accepted but ignored) |
-| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
-| server | `listen` (with `ssl` / `default`) `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` `server_tokens` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
+| http | `server` `upstream` `log_format` `access_log` `error_log` `root` `index` `gzip*` `limit_req_zone` `limit_conn_zone` `proxy_cache_path` `client_max_body_size` `server_tokens` `block_actuator` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
+| server | `listen` (with `ssl` / `default`) `server_name` `root` `index` `access_log` `location` `rewrite` `ssl_certificate` `ssl_certificate_key` `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `error_page` `client_max_body_size` `server_tokens` `block_actuator` `ssl_protocols` `expires` `proxy_buffering` `proxy_buffers` `proxy_max_temp_file_size` |
 | location | `root` `alias` `index` `proxy_pass` `return` `rewrite` `try_files` (incl. `@named`) `gzip*` `limit_req` `limit_conn` `proxy_cache` `proxy_cache_valid` `proxy_set_header` `proxy_cookie_path` `proxy_redirect` `proxy_hide_header` `proxy_pass_header` `client_max_body_size` `add_header` `allow`/`deny` `auth_basic`/`auth_basic_user_file` `autoindex` `expires` `proxy_connect_timeout`/`proxy_read_timeout` `proxy_buffering`/`proxy_buffers`/`proxy_max_temp_file_size` |
 | upstream | `server` (with `weight=` `max_fails=` `fail_timeout=` `backup` `down`) `least_conn` `ip_hash` |
 | stream | `upstream` `server` |
@@ -158,7 +158,7 @@ same probe the no-argument start uses, so running these from the config's own
 directory needs no path:
 
 ```sh
-crest -s reload   # hot reload: switches only if the new config validates
+crest -s reload   # hot reload: switches only if the new config validates and binds
 crest -s reopen   # reopen log files (for external logrotate)
 crest -s status   # show runtime status
 crest -s stop     # graceful stop
@@ -208,7 +208,7 @@ Windows, in an Administrator PowerShell:
 .\crest.exe restart
 .\crest.exe stop
 .\crest.exe uninstall
-# With the Win7 package, substitute crest-win7-amd64.exe for crest.exe.
+# With Win7, substitute crest-win7-amd64.exe (64-bit) or crest-win7-386.exe (32-bit).
 ```
 
 Use either `install` followed by `start`, or `install --start`; repeated installs
@@ -286,9 +286,26 @@ logrotate (`mv` + `crest -s reopen`) with none of Windows' file-locking limits.
 
 The control channel: the main process opens a token-guarded port on 127.0.0.1 and
 writes its address to `<conf>.ctl` (mode 0600), which the `-s` commands read —
-Windows has no SIGHUP, so this approach is consistent across platforms. Note that
-reload is "build the new instance, close old listeners, start new ones", so the
-port handoff has a millisecond window — not nginx's zero-downtime fd passing.
+Windows has no SIGHUP, so this approach is consistent across platforms.
+
+Reload starts the new instance before retiring the old one. Listen addresses
+present in both configs (HTTP, stream TCP and UDP) keep their bound sockets,
+handed over inside the process, so no connection is refused during a reload.
+Addresses that are new in the config are bound first; if one fails (for
+example, the port is occupied), the reload is rejected with an error and the
+running configuration keeps serving. The old instance stops accepting at once
+and finishes in-flight requests in the background for up to 5s; reload does not
+wait for them. It then closes its idle upstream keep-alive connections. Established stream TCP connections and UDP sessions stay on their
+original upstream until they end.
+
+Unchanged zones keep their state across a reload, as in nginx: the
+`proxy_cache` index and files, `limit_req` buckets (a changed `rate` applies to
+the existing buckets) and `limit_conn` counts, which also include requests the
+old instance is still finishing. A zone whose key or cache directory changed
+starts empty (nginx rejects that reload instead). Passive upstream health
+(`max_fails` marks) starts fresh, as it does with nginx's per-worker state. `80`, `*:80` and `0.0.0.0:80` count as the
+same address; hostnames are compared as written, so changing `localhost:80` to
+`127.0.0.1:80` is rejected while the old socket holds the port.
 
 ## nginx-aligned semantics
 
@@ -348,7 +365,7 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
   `Cache-Control`/`Expires` > `proxy_cache_valid`; `no-store`/`private`/
   `Set-Cookie`/`Authorization` requests are not cached; responses carry
   `X-Cache-Status: HIT|MISS|BYPASS` (`BYPASS` means the recording budget is full).
-  Cold after restart (index not persisted), and
+  Kept across reloads, cold after a restart (index not persisted), and
   `Vary` selects independent variants by request header. GET and HEAD share
   entries, only GET populates them, and `Vary: *` is never cached.
 - **stream (L4)**: TCP and UDP proxying with upstream load balancing and
@@ -362,6 +379,23 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 - **add_header**: supports `always`; nginx nearest-scope override (a location's
   own headers shadow server/http)
 - **allow / deny**: IP / CIDR / `all` access control, first match wins
+- **Actuator protection**: HTTP listeners automatically return `403 Forbidden`
+  for decoded request paths matching `(?i)(^|/)actuator([/;]|$)`, without an
+  extra location rule. It applies to every method and virtual host, before
+  location selection, and is checked again after internal URI changes.
+  Exact/priority locations and custom error pages cannot override the denial;
+  denied requests still count in statistics and access logs. `/actuators` and
+  query parameters containing `actuator` are unaffected. This also covers HTTPS
+  terminated by crest, but not `stream` TCP/UDP or HTTPS passthrough, where crest
+  cannot inspect the HTTP path. Custom backend management paths still require
+  their own access controls. Set `block_actuator: false` under `http` to disable
+  the built-in check globally, or under an individual server to override that
+  site's setting. The default is `true`; a server inherits from `http` unless
+  explicitly set. In nginx syntax, use the crest-specific `block_actuator off;`
+  or `block_actuator on;` at http/server scope. Existing manual deny/return rules
+  are unaffected, so remove a manual actuator 403 rule as well if access is
+  intended. Config changes take effect on reload; older binaries need upgrading
+  before they recognize this setting.
 - **auth_basic**: HTTP Basic auth, htpasswd supports bcrypt / Apache-MD5
   (`$apr1$`) / SHA1 / plaintext
 - **autoindex**: directory listing (nginx-style HTML)
@@ -376,6 +410,17 @@ port handoff has a millisecond window — not nginx's zero-downtime fd passing.
 - **expires**: `Cache-Control` + `Expires` headers (duration / `off` / `epoch` /
   `max` / negative no-cache)
 - **server_tokens**: whether the `Server` header exposes the version
+- **string escapes**: like nginx, every argument (quoted or not) resolves
+  `\"` `\'` `\\` to the character and `\n` `\t` `\r` to newline, tab and
+  carriage return, so `return 200 "ok\n";` ends with a newline and
+  `log_format tsv '$status\t$uri';` writes tab-separated fields. Other
+  backslashes (regex `\d`, `\.`) are kept. One deliberate difference: the path
+  directives `root`, `alias`, `access_log`, `error_log`, `ssl_certificate`,
+  `ssl_certificate_key`, `auth_basic_user_file`, `proxy_cache_path`, `include` and `pid`
+  keep backslashes as written, so Windows paths like `C:\nginx\html` work
+  (nginx itself would turn their `\n` into a newline). A quoted path that ends
+  in a backslash needs it doubled (`"C:\web\\"`), because `\"` escapes the
+  closing quote
 - Unknown directives are warned and ignored, so a real nginx.conf mostly runs
   as-is
 
@@ -406,23 +451,27 @@ through uncached).
 ## Build
 
 ```sh
-go build -o dist/crest.exe ./cmd/crest    # cmd/crest/rsrc_windows.syso embeds the icon
-./build.sh                          # Windows + Linux amd64/arm64 + Windows 7 amd64,
+go build -o dist/crest ./cmd/crest   # native host build
+./build.sh                          # Windows amd64 + Linux amd64/arm64 + Win7 amd64/386,
                                     # built with -trimpath so no absolute source
                                     # paths from the build machine get embedded
 
 # regenerate the icon (ico for the exe + png for this README)
-go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows.syso \
+go run ./tools/genicon -o cmd/crest/crest.ico -syso cmd/crest/rsrc_windows_amd64.syso \
     -png crest.png -png-size 200
+go run ./tools/genicon -o cmd/crest/crest.ico -arch 386 \
+    -syso cmd/crest/rsrc_windows_386.syso
 ```
 
-The Windows 7 target (`crest-win7-amd64.exe`) requires a separate Go 1.20.14
-SDK. By default the script uses
+Every `./build.sh` run includes both Windows 7 targets: `crest-win7-amd64.exe`
+(64-bit) and `crest-win7-386.exe` (32-bit, x86 with SSE2). Each embeds the icon
+resource for its architecture and uses a separate Go 1.20.14 SDK.
+By default the script uses
 `$HOME/.local/share/crest-build/go1.20.14/go`; set
 `WIN7_GOROOT=/path/to/go1.20.14 ./build.sh` to use another installation.
 The other three targets continue using `go` from PATH. No global SDK settings
 are changed; a missing or incorrect Win7 SDK stops the script before building.
-Build outputs default to `dist/`. Use `OUTPUT_DIR=dist/v1.1.0 ./build.sh` for
+Build outputs default to `dist/`. Use `OUTPUT_DIR=dist/v1.2.0 ./build.sh` for
 a versioned directory. Download packaged binaries from
 [GitHub Releases](https://github.com/xy-xxy/crest/releases); release binaries
 and checksums are no longer tracked at the repository root.
@@ -463,3 +512,7 @@ Run them with the race detector too — the buffering path is concurrent:
 ```sh
 go test -race ./...
 ```
+
+`.github/workflows/ci.yml` runs gofmt, vet and the tests on Linux, macOS and
+Windows (with `-race` except on Windows), vets and tests with Go 1.20.14 for the
+Win7 targets, and runs `./build.sh` for every release target.

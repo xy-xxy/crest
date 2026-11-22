@@ -1,0 +1,70 @@
+name: CI
+
+on:
+  push:
+    branches: [master]
+  pull_request:
+
+permissions:
+  contents: read
+
+jobs:
+  test:
+    name: test (${{ matrix.os }})
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - name: gofmt
+        if: runner.os == 'Linux'
+        run: |
+          unformatted="$(gofmt -l cmd internal tools)"
+          if [ -n "$unformatted" ]; then echo "$unformatted"; exit 1; fi
+      - run: go vet ./...
+      # The proxy_buffering and reload paths are concurrent.
+      - name: go test -race
+        if: runner.os != 'Windows'
+        run: go test -race ./...
+      # -race needs cgo on Windows; the binaries themselves are built without it.
+      - name: go test
+        if: runner.os == 'Windows'
+        run: go test ./...
+
+  # The Win7 targets are built with Go 1.20.14. go.mod's "go 1.20" stops newer
+  # language features under a newer toolchain, but not newer stdlib APIs
+  # (slices, maps, log/slog ...), which only fail here.
+  go120:
+    name: Go 1.20 compatibility
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.14'
+      - run: go vet ./...
+      - run: GOOS=windows GOARCH=386 go vet ./...
+      - run: GOOS=windows GOARCH=amd64 go vet ./...
+      - run: go test ./...
+
+  build:
+    name: build.sh (all release targets)
+    needs: [test, go120]
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.20.14'
+          cache: false
+      - name: Keep Go 1.20.14 for the Win7 targets
+        run: echo "WIN7_GOROOT=$(go env GOROOT)" >> "$GITHUB_ENV"
+      - uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+      - run: ./build.sh
