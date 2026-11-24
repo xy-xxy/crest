@@ -4,6 +4,10 @@
 /crest.yml.bak
 /crest.yml.ctl
 
+# Personal config and its control file; crest.yml is the tracked sample.
+/crest.local.yml
+/crest.local.yml.ctl
+
 # Release binaries live in dist/, never at the repository root.
 /crest
 /crest.exe
