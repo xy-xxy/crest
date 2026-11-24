@@ -4,12 +4,12 @@
 </tr></table>
 
 ![Go](https://img.shields.io/badge/Go-1.20%2B-00ADD8?logo=go&logoColor=white)
-![Version](https://img.shields.io/badge/version-v1.2.0-17a2c6)
+![Version](https://img.shields.io/badge/version-v1.3.0-17a2c6)
 ![Platform](https://img.shields.io/badge/platform-Windows%20%7C%20Linux%20(amd64%2Farm64)-555)
 ![Tests](https://img.shields.io/badge/tests-9%20packages%20passing-brightgreen)
 ![Config](https://img.shields.io/badge/config-nginx.conf%20%2B%20YAML-17a2c6)
 
-> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.2.0**
+> Release notes: [English](RELEASE_NOTES_EN.md) · [中文](RELEASE_NOTES_CN.md) — current version **v1.3.0**
 
 crest is a single-binary, zero-dependency web server and reverse proxy. It runs
 your existing `nginx.conf` as-is, adds a cleaner native YAML format, and ships a
@@ -122,6 +122,9 @@ After starting, visit <http://localhost:8080/> (static page) and
 
 `http` / `server` also accept `add_header` `allow`/`deny` `auth_basic*`
 `autoindex` `map` and the timeout directives (nearest scope wins).
+
+`http` / `server` / `location` accept `set_real_ip_from` `real_ip_header`
+`real_ip_recursive`; each of the three is inherited on its own.
 
 `gzip*` = `gzip` `gzip_types` `gzip_min_length` `gzip_comp_level` (inherited
 across http/server/location).
@@ -318,6 +321,21 @@ same address; hostnames are compared as written, so changing `localhost:80` to
   `http://b/v1/` → `/v1/x`); without one it passes the original URI through;
   default `Host: $proxy_host`, and injects `X-Real-IP` / `X-Forwarded-For` /
   `X-Forwarded-Proto`
+- **real client IP**: behind a load balancer or CDN, `set_real_ip_from` lists the
+  trusted proxies (IP or CIDR; default none, so nothing is trusted) and
+  `real_ip_header` names the header they set (default `X-Real-IP`). The client
+  address is then replaced for the whole request: access log, `allow`/`deny`,
+  `limit_req`/`limit_conn` keys, `ip_hash`, `$remote_addr`, and the `X-Real-IP` /
+  `X-Forwarded-For` sent upstream. With several proxies in front, use
+  `real_ip_header X-Forwarded-For` and `real_ip_recursive on`: the last address
+  that is not a trusted proxy is the client. `$realip_remote_addr` and
+  `$realip_remote_port` keep the connection's own address. Trust only proxies
+  that set or append the header themselves — a trusted `0.0.0.0/0` lets every
+  client choose its address. Differences from nginx: hostnames and `unix:` are
+  not accepted as trusted proxies (a hostname is an error, `unix:` a warning),
+  `proxy_protocol` is not supported (nginx syntax warns and replaces nothing,
+  YAML rejects it), and an IPv4-mapped IPv6 address becomes plain IPv4 (as a
+  trusted proxy it is an error: write the IPv4 form)
 - **proxy_buffering**: on by default, like nginx — the upstream response is
   read at full speed into a buffer (memory up to `proxy_buffers` count × size,
   then a temp file capped by `proxy_max_temp_file_size`) so the backend
@@ -471,7 +489,7 @@ By default the script uses
 `WIN7_GOROOT=/path/to/go1.20.14 ./build.sh` to use another installation.
 The other three targets continue using `go` from PATH. No global SDK settings
 are changed; a missing or incorrect Win7 SDK stops the script before building.
-Build outputs default to `dist/`. Use `OUTPUT_DIR=dist/v1.2.0 ./build.sh` for
+Build outputs default to `dist/`. Use `OUTPUT_DIR=dist/v1.3.0 ./build.sh` for
 a versioned directory. Download packaged binaries from
 [GitHub Releases](https://github.com/xy-xxy/crest/releases); release binaries
 and checksums are no longer tracked at the repository root.

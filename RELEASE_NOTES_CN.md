@@ -2,6 +2,28 @@
 
 本项目遵循语义化版本。
 
+## v1.3.0 — 2026-11-24
+
+- 新增真实客户端 IP（对应 nginx 的 realip 模块）：`set_real_ip_from` 列出受信
+  代理（IP 或 CIDR），`real_ip_header` 指定请求头（默认 `X-Real-IP`），
+  `real_ip_recursive` 用于多级代理。可写在 http / server / location，三项各自
+  独立继承；nginx 语法与 YAML 均支持，YAML 写空列表表示不信任任何代理。
+- 请求来自受信代理时，整个请求的客户端地址都会替换：访问日志、`allow`/`deny`、
+  `limit_req`/`limit_conn`、`ip_hash`、`$remote_addr`，以及传给后端的
+  `X-Real-IP` / `X-Forwarded-For`。默认不信任任何代理，不配置时行为不变。
+- 新增变量 `$realip_remote_addr`、`$realip_remote_port`，保留替换前的连接地址
+  和端口。管理页面的 `ui.allow` 始终按实际连接地址判断，不受影响。
+- 与 nginx 的差异：受信代理不支持域名（报错）和 `unix:`（nginx 语法警告，YAML
+  报错）；不支持 `proxy_protocol`（nginx 语法警告且不替换地址，YAML 报错）；
+  IPv4 映射的 IPv6 地址按 IPv4 处理，写成受信代理会报错，请直接写 IPv4。
+- 示例 `crest.yml` 不再写固定的 `ui.token`，改为每次启动随机生成。如果直接使用过
+  示例里的 token，请更换。
+
+升级注意：此前 `set_real_ip_from`、`real_ip_header`、`real_ip_recursive` 在 nginx
+配置中作为未知指令被警告并忽略，升级后会生效。请确认受信列表里只有会自行设置或
+追加该请求头的代理；写 `0.0.0.0/0` 会让任何客户端都能伪造地址。含域名等不支持的
+地址现在会使配置加载失败，升级前请先用 `crest -t` 检查。
+
 ## v1.2.0 — 2026-11-22
 
 - HTTP 默认拦截匹配 `(?i)(^|/)actuator([/;]|$)` 的已解码请求路径，返回

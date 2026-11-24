@@ -20,8 +20,9 @@ type vhost struct {
 	rewrites      []*rewriteRule
 	cert          *tls.Certificate
 	errorPages    map[int]string
-	serverHeader  string // Server header value per server_tokens
-	blockActuator bool   // resolved http/server setting, default on
+	serverHeader  string  // Server header value per server_tokens
+	blockActuator bool    // resolved http/server setting, default on
+	realIP        *realIP // resolved http/server setting, nil = no trusted proxies
 }
 
 type nameKind int

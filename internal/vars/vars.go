@@ -12,35 +12,67 @@ type ctxKey int
 
 const (
 	resolverKey ctxKey = iota
-	upstreamKey
+	slotKey
 )
 
-type upstreamSlot struct{ addr string }
+// requestSlot holds per-request values that are only known while the request
+// is being handled.
+type requestSlot struct {
+	upstream string // $upstream_addr
+	peer     string // connection address, once SetRealIP replaced RemoteAddr
+}
+
+func slotOf(r *http.Request) *requestSlot {
+	s, _ := r.Context().Value(slotKey).(*requestSlot)
+	return s
+}
 
 // WithExtras attaches an optional per-request resolver (e.g. map variables)
-// and a mutable slot for $upstream_addr to the request.
+// and the mutable slot for $upstream_addr and $realip_remote_* to the request.
 func WithExtras(r *http.Request, resolve func(string) (string, bool)) *http.Request {
 	ctx := r.Context()
 	if resolve != nil {
 		ctx = context.WithValue(ctx, resolverKey, resolve)
 	}
-	ctx = context.WithValue(ctx, upstreamKey, &upstreamSlot{})
+	ctx = context.WithValue(ctx, slotKey, &requestSlot{})
 	return r.WithContext(ctx)
 }
 
 // RecordUpstream stores the backend address a proxied request went to.
 func RecordUpstream(r *http.Request, addr string) {
-	if s, ok := r.Context().Value(upstreamKey).(*upstreamSlot); ok {
-		s.addr = addr
+	if s := slotOf(r); s != nil {
+		s.upstream = addr
 	}
 }
 
 // UpstreamAddr returns the recorded backend address, if any.
 func UpstreamAddr(r *http.Request) string {
-	if s, ok := r.Context().Value(upstreamKey).(*upstreamSlot); ok {
-		return s.addr
+	if s := slotOf(r); s != nil {
+		return s.upstream
 	}
 	return ""
+}
+
+// SetRealIP replaces the client address of r, keeping the connection's own
+// address for $realip_remote_addr and $realip_remote_port.
+func SetRealIP(r *http.Request, addr string) {
+	if s := slotOf(r); s != nil {
+		s.peer = r.RemoteAddr
+	}
+	r.RemoteAddr = addr
+}
+
+// RealIPSet reports whether SetRealIP has replaced the client address of r.
+func RealIPSet(r *http.Request) bool {
+	s := slotOf(r)
+	return s != nil && s.peer != ""
+}
+
+func peerAddr(r *http.Request) string {
+	if RealIPSet(r) {
+		return slotOf(r).peer
+	}
+	return r.RemoteAddr
 }
 
 // Value resolves one variable name (without the $) against a request.
@@ -80,6 +112,11 @@ func Value(r *http.Request, name string) string {
 		return r.Host
 	case "remote_addr", "binary_remote_addr":
 		return hostOnly(r.RemoteAddr)
+	case "realip_remote_addr":
+		return hostOnly(peerAddr(r))
+	case "realip_remote_port":
+		_, port, _ := net.SplitHostPort(peerAddr(r))
+		return port
 	case "request_method":
 		return r.Method
 	case "scheme":

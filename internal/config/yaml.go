@@ -63,6 +63,9 @@ type yamlCommon struct {
 	ProxyBuffering      *bool        `yaml:"proxy_buffering"`
 	ProxyBuffers        *yamlBuffers `yaml:"proxy_buffers"`
 	ProxyMaxTempFile    string       `yaml:"proxy_max_temp_file_size"`
+	SetRealIPFrom       []string     `yaml:"set_real_ip_from"`
+	RealIPHeader        string       `yaml:"real_ip_header"`
+	RealIPRecursive     *bool        `yaml:"real_ip_recursive"`
 }
 
 type yamlHTTP struct {
@@ -683,6 +686,9 @@ func applyCommonToHTTP(h *HTTP, c *yamlCommon) error {
 	if h.Expires, err = c.expires(); err != nil {
 		return err
 	}
+	if h.RealIP, err = c.realIP(); err != nil {
+		return err
+	}
 	if err = c.rateAndStatic(&h.LimitRate, &h.LimitRateAfter, &h.GzipStatic, &h.ProxySSLVerify, &h.ProxyBuffering, &h.ProxyBufferMem, &h.ProxyMaxTempFile); err != nil {
 		return err
 	}
@@ -701,6 +707,9 @@ func applyCommonToServer(s *Server, c *yamlCommon) error {
 	s.Auth = c.auth()
 	s.Autoindex = c.Autoindex
 	if s.Expires, err = c.expires(); err != nil {
+		return err
+	}
+	if s.RealIP, err = c.realIP(); err != nil {
 		return err
 	}
 	if err = c.rateAndStatic(&s.LimitRate, &s.LimitRateAfter, &s.GzipStatic, &s.ProxySSLVerify, &s.ProxyBuffering, &s.ProxyBufferMem, &s.ProxyMaxTempFile); err != nil {
@@ -726,6 +735,9 @@ func applyCommonToLocation(loc *Location, c *yamlCommon) error {
 	loc.Auth = c.auth()
 	loc.Autoindex = c.Autoindex
 	if loc.Expires, err = c.expires(); err != nil {
+		return err
+	}
+	if loc.RealIP, err = c.realIP(); err != nil {
 		return err
 	}
 	if err = c.rateAndStatic(&loc.LimitRate, &loc.LimitRateAfter, &loc.GzipStatic, &loc.ProxySSLVerify, &loc.ProxyBuffering, &loc.ProxyBufferMem, &loc.ProxyMaxTempFile); err != nil {

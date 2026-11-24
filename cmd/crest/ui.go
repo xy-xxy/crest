@@ -464,6 +464,11 @@ http:
       target: $conn_upgrade
       cases: {default: "", websocket: upgrade}
 
+  # 前面有负载均衡 / CDN 时，从请求头取真实客户端 IP（只信任列出的代理）
+  set_real_ip_from: [10.0.0.0/8, 192.168.1.10]
+  real_ip_header: X-Forwarded-For   # 默认 X-Real-IP
+  real_ip_recursive: true       # 跳过链上所有受信代理，取最后一个不受信地址
+
   # 以下为全局默认，server / location 就近覆盖
   client_max_body_size: 50m
   proxy_connect_timeout: 60s    # 连接后端超时
@@ -635,6 +640,9 @@ stream:
       <tr><td>add_headers</td><td>加响应头；always 时错误响应也加</td><td>[{name: X-Foo, value: bar, always: true}]</td></tr>
       <tr><td>access</td><td>IP 访问控制，按顺序首个命中生效</td><td>[{allow: 10.0.0.0/8}, {deny: all}]</td></tr>
       <tr><td>auth_basic</td><td>基础认证；htpasswd 支持 bcrypt/apr1/SHA1/明文</td><td>{realm: Admin, user_file: htpasswd}</td></tr>
+      <tr><td>set_real_ip_from</td><td>受信代理的 IP / CIDR（不支持域名）；只有来自这些地址的请求才会替换客户端 IP，影响日志、限流、access、ip_hash、$remote_addr 和传给后端的头。默认不信任任何代理；切勿写 0.0.0.0/0，否则任何人都能伪造 IP</td><td>[10.0.0.0/8, 192.168.1.10]</td></tr>
+      <tr><td>real_ip_header</td><td>取客户端 IP 的请求头，默认 X-Real-IP；不支持 proxy_protocol</td><td>X-Forwarded-For</td></tr>
+      <tr><td>real_ip_recursive</td><td>false（默认）取头里最后一个地址；true 从后往前跳过受信代理，取第一个不受信的地址（多级代理用）</td><td>real_ip_recursive: true</td></tr>
       <tr><td>autoindex</td><td>目录列表开关</td><td>autoindex: true</td></tr>
       <tr><td>client_max_body_size</td><td>请求体上限，超出 413</td><td>200m</td></tr>
       <tr><td>proxy_connect_timeout / proxy_read_timeout / proxy_send_timeout</td><td>连接/读/写后端超时</td><td>proxy_read_timeout: 300s</td></tr>
@@ -664,7 +672,8 @@ stream:
       <tr><td>$uri / $request_uri</td><td>当前路径（可被 rewrite 改）/ 原始完整 URI</td><td></td></tr>
       <tr><td>$args / $is_args</td><td>查询串 / 有查询串时为 "?"</td><td></td></tr>
       <tr><td>$host / $scheme</td><td>请求 Host（去端口）/ http 或 https</td><td></td></tr>
-      <tr><td>$remote_addr</td><td>客户端 IP（$binary_remote_addr 同义）</td><td></td></tr>
+      <tr><td>$remote_addr</td><td>客户端 IP（$binary_remote_addr 同义）；受 set_real_ip_from 影响</td><td></td></tr>
+      <tr><td>$realip_remote_addr / $realip_remote_port</td><td>替换前的连接地址 / 端口（即前面的代理）</td><td></td></tr>
       <tr><td>$proxy_add_x_forwarded_for</td><td>追加客户端 IP 后的 XFF 链</td><td></td></tr>
       <tr><td>$http_*、$arg_*、$cookie_*</td><td>任意请求头 / 查询参数 / Cookie</td><td>$http_user_agent</td></tr>
       <tr><td>$upstream_addr</td><td>实际服务的后端地址（日志用）</td><td></td></tr>

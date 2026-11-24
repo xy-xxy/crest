@@ -4,6 +4,35 @@ A drop-in nginx alternative written in Go: single binary, zero runtime
 dependencies, natively compatible with `nginx.conf`, plus a cleaner YAML config
 format and a built-in browser admin console.
 
+## v1.3.0 — 2026-11-24
+
+- Added real client IP support (nginx's realip module): `set_real_ip_from` lists
+  the trusted proxies (IP or CIDR), `real_ip_header` names the header (default
+  `X-Real-IP`) and `real_ip_recursive` handles several proxies in a row. All
+  three work in http, server and location, and each is inherited on its own, in
+  both nginx syntax and YAML. An empty YAML list trusts nobody.
+- For requests from a trusted proxy, the client address is replaced for the whole
+  request: access log, `allow`/`deny`, `limit_req`/`limit_conn`, `ip_hash`,
+  `$remote_addr`, and the `X-Real-IP` / `X-Forwarded-For` sent upstream. No proxy
+  is trusted by default, so nothing changes unless it is configured.
+- Added `$realip_remote_addr` and `$realip_remote_port`, which keep the
+  connection's own address and port. The admin console's `ui.allow` always checks
+  the actual connection address and is unaffected.
+- Differences from nginx: trusted proxies cannot be hostnames (an error) or
+  `unix:` (a warning in nginx syntax, an error in YAML); `proxy_protocol` is not
+  supported (nginx syntax warns and replaces nothing, YAML rejects it); an
+  IPv4-mapped IPv6 address is treated as IPv4, and is an error as a trusted proxy:
+  write the IPv4 form.
+- The sample `crest.yml` no longer sets a fixed `ui.token`; a random one is
+  generated at each start. If you used the sample's token as is, change it.
+
+Upgrade note: `set_real_ip_from`, `real_ip_header` and `real_ip_recursive` in an
+nginx config were previously warned about and ignored as unknown directives; they
+now take effect. Make sure the trusted list contains only proxies that set or
+append the header themselves. A trusted `0.0.0.0/0` lets any client forge its
+address. Hostnames and other unsupported addresses now make the config fail to
+load, so check it with `crest -t` before upgrading.
+
 ## v1.2.0 — 2026-11-22
 
 - HTTP listeners now reject decoded paths matching `(?i)(^|/)actuator([/;]|$)`

@@ -78,6 +78,7 @@ type HTTP struct {
 	LimitRate           *int64 // bytes/sec, 0 = unlimited
 	LimitRateAfter      *int64 // bytes sent before limiting starts
 	GzipStatic          *bool
+	RealIP              RealIP
 }
 
 // Expires is a parsed "expires" directive (ngx_http_headers_module).
@@ -191,6 +192,7 @@ type Server struct {
 	LimitRate           *int64
 	LimitRateAfter      *int64
 	GzipStatic          *bool
+	RealIP              RealIP
 	ValidReferers       []string
 	Line                int
 }
@@ -237,6 +239,7 @@ type Location struct {
 	LimitRate           *int64
 	LimitRateAfter      *int64
 	GzipStatic          *bool
+	RealIP              RealIP
 	ValidReferers       []string
 	Line                int
 }
@@ -537,6 +540,10 @@ func loadHTTP(cfg *Config, block []Directive) (*HTTP, error) {
 			if err := parseGzip(&h.Gzip, d); err != nil {
 				return nil, err
 			}
+		case "set_real_ip_from", "real_ip_header", "real_ip_recursive":
+			if err := parseRealIP(cfg, &h.RealIP, d); err != nil {
+				return nil, err
+			}
 		case "limit_req_zone":
 			name, z, err := parseLimitReqZone(d)
 			if err != nil {
@@ -745,6 +752,10 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 			if err := parseGzip(&s.Gzip, d); err != nil {
 				return nil, err
 			}
+		case "set_real_ip_from", "real_ip_header", "real_ip_recursive":
+			if err := parseRealIP(cfg, &s.RealIP, d); err != nil {
+				return nil, err
+			}
 		case "limit_req":
 			u, err := parseLimitReqUse(d)
 			if err != nil {
@@ -917,8 +928,9 @@ func loadServer(cfg *Config, sd *Directive) (*Server, error) {
 }
 
 // loadLocation parses one location block, flattening nested locations into
-// the returned slice. Nested locations inherit root/index from their parent
-// when unset. The first element is always the location itself.
+// the returned slice. Nested locations inherit root/index and the real_ip
+// directives from their parent when unset. The first element is always the
+// location itself.
 func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 	loc := &Location{Line: ld.Line}
 	switch len(ld.Args) {
@@ -981,6 +993,10 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 			loc.TryFiles = d.Args
 		case "gzip", "gzip_types", "gzip_min_length", "gzip_comp_level":
 			if err := parseGzip(&loc.Gzip, d); err != nil {
+				return nil, err
+			}
+		case "set_real_ip_from", "real_ip_header", "real_ip_recursive":
+			if err := parseRealIP(cfg, &loc.RealIP, d); err != nil {
 				return nil, err
 			}
 		case "limit_req":
@@ -1162,6 +1178,7 @@ func loadLocation(cfg *Config, ld *Directive) ([]*Location, error) {
 			if len(k.Index) == 0 {
 				k.Index = loc.Index
 			}
+			k.RealIP = k.RealIP.Inherit(loc.RealIP)
 		}
 		flat = append(flat, kids...)
 	}

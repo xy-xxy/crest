@@ -413,6 +413,7 @@ func (i *Instance) buildVHost(sv *config.Server, pools map[string]upstream.Pool)
 	}
 	v := &vhost{cfg: sv, locs: locs, names: names, serverHeader: serverHeaderValue(h.ServerTokens, sv.ServerTokens)}
 	v.blockActuator = resolveBlockActuator(h.BlockActuator, sv.BlockActuator)
+	v.realIP = resolveRealIP(sv.RealIP, h.RealIP)
 	v.rewrites, err = compileRewrites(sv.Rewrites)
 	if err != nil {
 		return nil, err
@@ -519,6 +520,10 @@ func (i *Instance) buildRoute(loc *config.Location, sv *config.Server, pools map
 	}
 	if hd, err = i.applyPolicies(hd, sv, loc); err != nil {
 		return nil, fmt.Errorf("location %q: %w", loc.Pattern, err)
+	}
+	if !loc.RealIP.IsZero() {
+		// outermost, so that every policy of the location sees the new address
+		hd = wrapRealIP(hd, resolveRealIP(loc.RealIP, sv.RealIP, i.cfg.HTTP.RealIP))
 	}
 	rt.handler = hd
 	return rt, nil
@@ -875,13 +880,17 @@ func (a *AddrServer) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	}
 	v := a.group.match(r.Host)
 	var protectActuator bool
+	var realip *realIP
 	if v != nil {
 		rw.serverHeader = v.serverHeader
 		protectActuator = v.blockActuator
+		realip = v.realIP
 	} else {
 		rw.serverHeader = serverHeaderValue(a.inst.cfg.HTTP.ServerTokens)
 		protectActuator = resolveBlockActuator(a.inst.cfg.HTTP.BlockActuator, nil)
+		realip = resolveRealIP(a.inst.cfg.HTTP.RealIP)
 	}
+	realip.apply(r) // before anything reads the client address
 	switch {
 	case protectActuator && blockActuator(rw, r):
 		// Keep denied requests in the normal statistics and access-log path.
