@@ -34,7 +34,7 @@ go run ./tools/genicon -o cmd/crest/crest.ico -arch 386 \
 
 `CREST_PPROF=127.0.0.1:6060` enables net/http/pprof on a running instance.
 
-CI (`.github/workflows/ci.yml`, GitHub remote only; `origin` is Gitee) runs gofmt, vet and tests on Linux/macOS/Windows (`-race` except Windows), a Go 1.20.14 vet+test job, and `./build.sh` with `WIN7_GOROOT` pointed at that toolchain.
+CI (`.github/workflows/ci.yml`; the only remote is `github`) runs gofmt, vet and tests on Linux/macOS/Windows (`-race` except Windows), a Go 1.20.14 vet+test job, and `./build.sh` with `WIN7_GOROOT` pointed at that toolchain.
 
 ## Architecture
 
